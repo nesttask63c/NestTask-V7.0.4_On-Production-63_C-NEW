@@ -537,21 +537,6 @@ export default function App() {
       )}
       
       <main className="max-w-7xl mx-auto px-4 py-20 pb-24">
-        {isOffline && (
-          <div className="mb-4 bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-md">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <AlertCircle className="h-5 w-5 text-yellow-400" />
-              </div>
-              <div className="ml-3">
-                <p className="text-sm text-yellow-700">
-                  You are currently offline. Some features may be limited.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-        
         {tasksLoading ? (
           <LoadingScreen minimumLoadTime={500} showProgress={false} />
         ) : (

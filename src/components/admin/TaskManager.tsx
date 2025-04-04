@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { TaskForm } from './task/TaskForm';
 import { TaskTable } from './task/TaskTable';
 import { TaskStats } from './task/TaskStats';
@@ -21,16 +21,28 @@ interface TaskManagerProps {
   onCreateTask: (task: NewTask) => void;
   onDeleteTask: (taskId: string) => void;
   onUpdateTask: (taskId: string, updates: Partial<Task>) => void;
+  showTaskForm?: boolean;
 }
 
-export function TaskManager({ tasks, onCreateTask, onDeleteTask, onUpdateTask }: TaskManagerProps) {
-  const [showTaskForm, setShowTaskForm] = useState(false);
+export function TaskManager({ 
+  tasks, 
+  onCreateTask, 
+  onDeleteTask, 
+  onUpdateTask,
+  showTaskForm: initialShowTaskForm = false
+}: TaskManagerProps) {
+  const [showTaskForm, setShowTaskForm] = useState(initialShowTaskForm);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'createdAt' | 'dueDate' | 'name' | 'category'>('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+
+  // Update showTaskForm when the prop changes
+  useEffect(() => {
+    setShowTaskForm(initialShowTaskForm);
+  }, [initialShowTaskForm]);
 
   // Filter tasks
   const filteredTasks = tasks.filter(task => {
@@ -292,21 +304,19 @@ export function TaskManager({ tasks, onCreateTask, onDeleteTask, onUpdateTask }:
       {showTaskForm && (
         <TaskForm onSubmit={onCreateTask} />
       )}
+      
+      {/* Task Analytics - moved to appear after the task form */}
+      <div className="mb-6">
+        <TaskStats tasks={tasks} />
+      </div>
 
-      <div className="flex flex-col xl:grid xl:grid-cols-3 gap-4 md:gap-6">
-        {/* Task Analytics - shown first on mobile, but in the right column on desktop */}
-        <div className="order-first xl:order-last">
-          <TaskStats tasks={tasks} />
-        </div>
-        
-        {/* Task Table - shown second on mobile, but in the left/main column on desktop */}
-        <div className="order-last xl:order-first xl:col-span-2">
-          <TaskTable 
-            tasks={sortedTasks} 
-            onDeleteTask={onDeleteTask} 
-            onUpdateTask={onUpdateTask} 
-          />
-        </div>
+      {/* Task Table */}
+      <div>
+        <TaskTable 
+          tasks={sortedTasks} 
+          onDeleteTask={onDeleteTask} 
+          onUpdateTask={onUpdateTask} 
+        />
       </div>
     </div>
   );

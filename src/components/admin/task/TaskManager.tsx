@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { TaskForm } from './TaskForm';
 import { TaskTable } from './TaskTable';
 import { TaskStats } from './TaskStats';
@@ -32,46 +32,61 @@ export function TaskManager({ tasks, onCreateTask, onDeleteTask, onUpdateTask }:
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilters, setShowFilters] = useState(false);
 
-  // Filter tasks
-  const filteredTasks = tasks.filter(task => {
-    // Category filter
-    if (categoryFilter !== 'all' && task.category !== categoryFilter) {
-      return false;
-    }
-    
-    // Status filter
-    if (statusFilter !== 'all' && task.status !== statusFilter) {
-      return false;
-    }
-    
-    // Search filter
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      return (
-        task.name.toLowerCase().includes(term) ||
-        task.description.toLowerCase().includes(term)
-      );
-    }
-    
-    return true;
-  });
+  // Memoize filtered and sorted tasks to prevent unnecessary recalculations
+  const filteredTasks = useMemo(() => {
+    return tasks.filter(task => {
+      // Filter by search term
+      if (searchTerm && !task.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
+          !task.description.toLowerCase().includes(searchTerm.toLowerCase())) {
+        return false;
+      }
+      
+      // Filter by category
+      if (categoryFilter !== 'all' && task.category !== categoryFilter) {
+        return false;
+      }
+      
+      // Filter by status
+      if (statusFilter !== 'all' && task.status !== statusFilter) {
+        return false;
+      }
+      
+      return true;
+    });
+  }, [tasks, searchTerm, categoryFilter, statusFilter]);
 
-  // Sort tasks
-  const sortedTasks = [...filteredTasks].sort((a, b) => {
-    let comparison = 0;
-    
-    if (sortBy === 'dueDate') {
-      comparison = new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
-    } else if (sortBy === 'name') {
-      comparison = a.name.localeCompare(b.name);
-    } else if (sortBy === 'category') {
-      comparison = a.category.localeCompare(b.category);
-    } else if (sortBy === 'createdAt') {
-      comparison = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-    }
-    
-    return sortOrder === 'asc' ? comparison : -comparison;
-  });
+  const sortedTasks = useMemo(() => {
+    return [...filteredTasks].sort((a, b) => {
+      if (sortBy === 'dueDate') {
+        return sortOrder === 'asc' 
+          ? new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()
+          : new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime();
+      } 
+      
+      if (sortBy === 'name') {
+        return sortOrder === 'asc' 
+          ? a.name.localeCompare(b.name)
+          : b.name.localeCompare(a.name);
+      }
+      
+      if (sortBy === 'category') {
+        return sortOrder === 'asc' 
+          ? a.category.localeCompare(b.category)
+          : b.category.localeCompare(a.category);
+      }
+      
+      if (sortBy === 'createdAt') {
+        return sortOrder === 'asc' 
+          ? new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+          : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      }
+      
+      // Default sort by createdAt
+      return sortOrder === 'asc'
+        ? new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+  }, [filteredTasks, sortBy, sortOrder]);
 
   // Export tasks to CSV
   const exportToCSV = () => {
@@ -104,6 +119,11 @@ export function TaskManager({ tasks, onCreateTask, onDeleteTask, onUpdateTask }:
     link.click();
     document.body.removeChild(link);
   };
+
+  // Memoize TaskStats component to prevent unnecessary re-renders
+  const memoizedTaskStats = useMemo(() => {
+    return <TaskStats tasks={tasks} />;
+  }, [tasks]);
 
   return (
     <div className="space-y-6">
@@ -295,17 +315,16 @@ export function TaskManager({ tasks, onCreateTask, onDeleteTask, onUpdateTask }:
         <TaskForm onSubmit={onCreateTask} />
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <TaskTable 
-            tasks={sortedTasks} 
-            onDeleteTask={onDeleteTask} 
-            onUpdateTask={onUpdateTask} 
-          />
-        </div>
-        <div>
-          <TaskStats tasks={tasks} />
-        </div>
+      <div className="mb-6">
+        {memoizedTaskStats}
+      </div>
+
+      <div>
+        <TaskTable 
+          tasks={sortedTasks} 
+          onDeleteTask={onDeleteTask} 
+          onUpdateTask={onUpdateTask} 
+        />
       </div>
     </div>
   );

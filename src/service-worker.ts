@@ -16,6 +16,12 @@ import { CacheableResponsePlugin } from 'workbox-cacheable-response';
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import { warmStrategyCache } from 'workbox-recipes';
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
+import { BackgroundSyncPlugin } from 'workbox-background-sync';
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
+import { Queue } from 'workbox-background-sync';
 
 // Clean up outdated caches
 cleanupOutdatedCaches();
@@ -38,7 +44,7 @@ function isValidCacheURL(url: string): boolean {
   }
 }
 
-// Define URLs to preload/warm up cache
+// Define URLs to preload/warm up cache - expanded essential assets list
 const URLS_TO_CACHE = [
   '/',
   '/index.html',
@@ -46,18 +52,26 @@ const URLS_TO_CACHE = [
   '/icons/icon-192x192.png',
   '/icons/icon-512x512.png',
   '/offline.html',
+  '/icons/add-task.png',
+  '/icons/view-tasks.png',
+  '/icons/badge.png',
+  // Add core app routes
+  '/home',
+  '/upcoming',
+  '/search',
+  '/routine',
 ];
 
 // Cache critical static assets with a Cache First strategy
 const staticAssetsStrategy = new CacheFirst({
-  cacheName: 'static-assets-v2',
+  cacheName: 'static-assets-v3',
   plugins: [
     new CacheableResponsePlugin({
       statuses: [0, 200],
     }),
     new ExpirationPlugin({
-      maxEntries: 150,
-      maxAgeSeconds: 30 * 24 * 60 * 60, // 30 Days
+      maxEntries: 200, // Increased from 150
+      maxAgeSeconds: 90 * 24 * 60 * 60, // 90 Days (increased from 30 days)
       purgeOnQuotaError: true // Delete old entries when cache is full
     }),
   ],
@@ -83,11 +97,11 @@ registerRoute(
     return request.destination === 'image';
   },
   new CacheFirst({
-    cacheName: 'images-v2',
+    cacheName: 'images-v3',
     plugins: [
       new ExpirationPlugin({
-        maxEntries: 100,
-        maxAgeSeconds: 30 * 24 * 60 * 60, // 30 Days
+        maxEntries: 150, // Increased from 100
+        maxAgeSeconds: 90 * 24 * 60 * 60, // 90 Days (increased from 30 days)
         purgeOnQuotaError: true // Delete old entries when cache is full
       }),
       new CacheableResponsePlugin({
@@ -112,14 +126,14 @@ registerRoute(
            request.destination === 'style';
   },
   new StaleWhileRevalidate({
-    cacheName: 'static-resources-v2',
+    cacheName: 'static-resources-v3',
     plugins: [
       new CacheableResponsePlugin({
         statuses: [0, 200],
       }),
       new ExpirationPlugin({
-        maxEntries: 100,
-        maxAgeSeconds: 7 * 24 * 60 * 60, // 7 days
+        maxEntries: 150, // Increased from 100
+        maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days (increased from 7 days)
         purgeOnQuotaError: true // Delete old entries when cache is full
       }),
     ],
@@ -142,14 +156,14 @@ registerRoute(
            url.origin.includes('fonts.gstatic.com');
   },
   new CacheFirst({
-    cacheName: 'fonts-v2',
+    cacheName: 'fonts-v3',
     plugins: [
       new CacheableResponsePlugin({
         statuses: [0, 200],
       }),
       new ExpirationPlugin({
-        maxEntries: 30, 
-        maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
+        maxEntries: 50, // Increased from 30
+        maxAgeSeconds: 365 * 24 * 60 * 60, // 1 year (no change)
         purgeOnQuotaError: true // Delete old entries when cache is full
       }),
     ],
@@ -173,17 +187,20 @@ registerRoute(
            url.pathname === '/upcoming' || 
            url.pathname === '/search' ||
            url.pathname === '/routine' || 
+           url.pathname === '/home' ||
+           url.pathname === '/courses' ||
+           url.pathname === '/profile' ||
            url.pathname.startsWith('/static/');
   },
   new NetworkFirst({
-    cacheName: 'app-pages-v2',
+    cacheName: 'app-pages-v3',
     plugins: [
       new CacheableResponsePlugin({
         statuses: [0, 200],
       }),
       new ExpirationPlugin({
-        maxEntries: 30,
-        maxAgeSeconds: 7 * 24 * 60 * 60, // 7 days
+        maxEntries: 50, // Increased from 30
+        maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days (increased from 7 days)
         purgeOnQuotaError: true // Delete old entries when cache is full
       }),
     ],
@@ -204,11 +221,11 @@ registerRoute(
     return url.pathname.startsWith('/api/');
   },
   new NetworkFirst({
-    cacheName: 'api-responses-v2',
+    cacheName: 'api-responses-v3',
     plugins: [
       new ExpirationPlugin({
-        maxEntries: 150,
-        maxAgeSeconds: 24 * 60 * 60, // 24 hours
+        maxEntries: 200, // Increased from 150
+        maxAgeSeconds: 7 * 24 * 60 * 60, // 7 days (increased from 24 hours)
         purgeOnQuotaError: true // Delete old entries when cache is full
       }),
     ],
@@ -233,14 +250,14 @@ registerRoute(
            url.pathname.includes('/teacher');
   },
   new NetworkFirst({
-    cacheName: 'app-data-v2',
+    cacheName: 'app-data-v3',
     plugins: [
       new CacheableResponsePlugin({
         statuses: [0, 200],
       }),
       new ExpirationPlugin({
-        maxEntries: 100,
-        maxAgeSeconds: 12 * 60 * 60, // 12 hours
+        maxEntries: 150, // Increased from 100
+        maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days (increased from 12 hours)
         purgeOnQuotaError: true // Delete old entries when cache is full
       }),
     ],
@@ -267,14 +284,14 @@ registerRoute(
            url.searchParams.get('apikey') !== null;
   },
   new StaleWhileRevalidate({
-    cacheName: 'supabase-api-v2',
+    cacheName: 'supabase-api-v3',
     plugins: [
       new CacheableResponsePlugin({
         statuses: [0, 200],
       }),
       new ExpirationPlugin({
-        maxEntries: 200,
-        maxAgeSeconds: 24 * 60 * 60, // 24 hours
+        maxEntries: 250, // Increased from 200
+        maxAgeSeconds: 7 * 24 * 60 * 60, // 7 days (increased from 24 hours)
         purgeOnQuotaError: true // Delete old entries when cache is full
       }),
     ],
@@ -291,7 +308,7 @@ self.addEventListener('install', (event: any) => {
   (self as any).skipWaiting();
   
   event.waitUntil(
-    caches.open('offline-cache-v2').then((cache) => {
+    caches.open('offline-cache-v3').then((cache) => {
       return cache.add(OFFLINE_PAGE);
     })
   );
@@ -309,11 +326,15 @@ self.addEventListener('activate', (event: any) => {
       return Promise.all(
         cacheNames
           .filter(cacheName => {
-            // Delete any old version caches (those that don't end with -v2)
-            return !cacheName.endsWith('-v2') && 
+            // Delete any old version caches (those that don't end with -v3)
+            return !cacheName.endsWith('-v3') && 
                   (cacheName.startsWith('static-') || 
                    cacheName.startsWith('images-') || 
-                   cacheName.startsWith('app-'));
+                   cacheName.startsWith('app-') ||
+                   cacheName.startsWith('supabase-') ||
+                   cacheName.startsWith('fonts-') ||
+                   cacheName.startsWith('api-') ||
+                   cacheName === 'offline-cache-v2');
           })
           .map(cacheName => {
             console.log('Deleting old cache:', cacheName);
@@ -388,19 +409,19 @@ self.addEventListener('fetch', (event: any) => {
           // Try the network first for navigation
           const networkResponse = await fetch(event.request);
           // Save successful responses in cache
-          const cache = await caches.open('app-pages-v2');
+          const cache = await caches.open('app-pages-v3');
           cache.put(event.request, networkResponse.clone());
           return networkResponse;
         } catch (error) {
           // If network fails, try to get the page from cache
-          const cache = await caches.open('app-pages-v2');
+          const cache = await caches.open('app-pages-v3');
           const cachedResponse = await cache.match(event.request);
           if (cachedResponse) {
             return cachedResponse;
           }
 
           // If the page isn't in cache, return the offline page
-          const offlineCache = await caches.open('offline-cache-v2');
+          const offlineCache = await caches.open('offline-cache-v3');
           const offlineResponse = await offlineCache.match(OFFLINE_PAGE);
           return offlineResponse;
         }
@@ -409,14 +430,103 @@ self.addEventListener('fetch', (event: any) => {
   }
 });
 
-// Background sync for offline operations
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-const bgSyncPlugin = new workbox.backgroundSync.BackgroundSyncPlugin('offlineQueue', {
+// Create separate queues for different API operations
+const taskSyncQueue = new Queue('taskQueue', {
+  maxRetentionTime: 24 * 60 // Retry for up to 24 Hours (in minutes)
+});
+
+const routineSyncQueue = new Queue('routineQueue', {
   maxRetentionTime: 24 * 60 // Retry for up to 24 Hours
 });
 
-// Updated API routes for tasks, routines, courses, etc. to use background sync
+const courseTeacherSyncQueue = new Queue('courseTeacherQueue', {
+  maxRetentionTime: 24 * 60 // Retry for up to 24 Hours
+});
+
+// Create plugins from queues for the background sync
+const taskBgSyncPlugin = new BackgroundSyncPlugin('taskQueue', {
+  maxRetentionTime: 24 * 60, // Retry for up to 24 Hours
+  onSync: async ({ queue }) => {
+    let entry;
+    while ((entry = await queue.shiftRequest())) {
+      try {
+        await fetch(entry.request.clone());
+        console.log('Sync successful for task operation');
+        
+        // Notify the client that sync is complete
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const clients = await (self as any).clients.matchAll({ type: 'window' });
+        for (const client of clients) {
+          client.postMessage({
+            type: 'BACKGROUND_SYNC_COMPLETED',
+            category: 'task'
+          });
+        }
+      } catch (error) {
+        console.error('Sync failed for task:', error);
+        // Put the entry back in the queue and rethrow the error
+        await queue.unshiftRequest(entry);
+        throw error;
+      }
+    }
+  }
+});
+
+const routineBgSyncPlugin = new BackgroundSyncPlugin('routineQueue', {
+  maxRetentionTime: 24 * 60, // Retry for up to 24 Hours
+  onSync: async ({ queue }) => {
+    let entry;
+    while ((entry = await queue.shiftRequest())) {
+      try {
+        await fetch(entry.request.clone());
+        console.log('Sync successful for routine operation');
+        
+        // Notify the client that sync is complete
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const clients = await (self as any).clients.matchAll({ type: 'window' });
+        for (const client of clients) {
+          client.postMessage({
+            type: 'BACKGROUND_SYNC_COMPLETED',
+            category: 'routine'
+          });
+        }
+      } catch (error) {
+        console.error('Sync failed for routine:', error);
+        await queue.unshiftRequest(entry);
+        throw error;
+      }
+    }
+  }
+});
+
+const courseTeacherBgSyncPlugin = new BackgroundSyncPlugin('courseTeacherQueue', {
+  maxRetentionTime: 24 * 60, // Retry for up to 24 Hours
+  onSync: async ({ queue }) => {
+    let entry;
+    while ((entry = await queue.shiftRequest())) {
+      try {
+        await fetch(entry.request.clone());
+        console.log('Sync successful for course/teacher operation');
+        
+        // Notify the client that sync is complete
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const clients = await (self as any).clients.matchAll({ type: 'window' });
+        for (const client of clients) {
+          client.postMessage({
+            type: 'BACKGROUND_SYNC_COMPLETED',
+            category: 'courseTeacher'
+          });
+        }
+      } catch (error) {
+        console.error('Sync failed for course/teacher:', error);
+        await queue.unshiftRequest(entry);
+        throw error;
+      }
+    }
+  }
+});
+
+// Updated API routes for tasks with background sync
 registerRoute(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ({ url }: { url: any }) => {
@@ -427,15 +537,15 @@ registerRoute(
         url.protocol === 'brave:') {
       return false;
     }
-    return url.pathname.match(/\/api\/(tasks|routines|courses|teachers).*/);
+    return url.pathname.match(/\/api\/tasks.*/);
   },
   new NetworkFirst({
-    plugins: [bgSyncPlugin]
+    cacheName: 'tasks-api-v3',
+    plugins: [taskBgSyncPlugin]
   }),
   'POST'
 );
 
-// Also handle PUT and DELETE requests for tasks and routines
 registerRoute(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ({ url }: { url: any }) => {
@@ -446,10 +556,11 @@ registerRoute(
         url.protocol === 'brave:') {
       return false;
     }
-    return url.pathname.match(/\/api\/(tasks|routines).*/);
+    return url.pathname.match(/\/api\/tasks.*/);
   },
   new NetworkFirst({
-    plugins: [bgSyncPlugin]
+    cacheName: 'tasks-api-v3',
+    plugins: [taskBgSyncPlugin]
   }),
   'PUT'
 );
@@ -464,13 +575,144 @@ registerRoute(
         url.protocol === 'brave:') {
       return false;
     }
-    return url.pathname.match(/\/api\/(tasks|routines).*/);
+    return url.pathname.match(/\/api\/tasks.*/);
   },
   new NetworkFirst({
-    plugins: [bgSyncPlugin]
+    cacheName: 'tasks-api-v3',
+    plugins: [taskBgSyncPlugin]
   }),
   'DELETE'
 );
+
+// Updated API routes for routines with background sync
+registerRoute(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ({ url }: { url: any }) => {
+    // Skip unsupported URL schemes
+    if (url.protocol === 'chrome-extension:' || 
+        url.protocol === 'chrome:' ||
+        url.protocol === 'edge:' ||
+        url.protocol === 'brave:') {
+      return false;
+    }
+    return url.pathname.match(/\/api\/routines.*/);
+  },
+  new NetworkFirst({
+    cacheName: 'routines-api-v3',
+    plugins: [routineBgSyncPlugin]
+  }),
+  'POST'
+);
+
+registerRoute(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ({ url }: { url: any }) => {
+    // Skip unsupported URL schemes
+    if (url.protocol === 'chrome-extension:' || 
+        url.protocol === 'chrome:' ||
+        url.protocol === 'edge:' ||
+        url.protocol === 'brave:') {
+      return false;
+    }
+    return url.pathname.match(/\/api\/routines.*/);
+  },
+  new NetworkFirst({
+    cacheName: 'routines-api-v3',
+    plugins: [routineBgSyncPlugin]
+  }),
+  'PUT'
+);
+
+registerRoute(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ({ url }: { url: any }) => {
+    // Skip unsupported URL schemes
+    if (url.protocol === 'chrome-extension:' || 
+        url.protocol === 'chrome:' ||
+        url.protocol === 'edge:' ||
+        url.protocol === 'brave:') {
+      return false;
+    }
+    return url.pathname.match(/\/api\/routines.*/);
+  },
+  new NetworkFirst({
+    cacheName: 'routines-api-v3',
+    plugins: [routineBgSyncPlugin]
+  }),
+  'DELETE'
+);
+
+// Updated API routes for courses & teachers with background sync
+registerRoute(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ({ url }: { url: any }) => {
+    // Skip unsupported URL schemes
+    if (url.protocol === 'chrome-extension:' || 
+        url.protocol === 'chrome:' ||
+        url.protocol === 'edge:' ||
+        url.protocol === 'brave:') {
+      return false;
+    }
+    return url.pathname.match(/\/api\/(courses|teachers).*/);
+  },
+  new NetworkFirst({
+    cacheName: 'course-teacher-api-v3',
+    plugins: [courseTeacherBgSyncPlugin]
+  }),
+  'POST'
+);
+
+registerRoute(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ({ url }: { url: any }) => {
+    // Skip unsupported URL schemes
+    if (url.protocol === 'chrome-extension:' || 
+        url.protocol === 'chrome:' ||
+        url.protocol === 'edge:' ||
+        url.protocol === 'brave:') {
+      return false;
+    }
+    return url.pathname.match(/\/api\/(courses|teachers).*/);
+  },
+  new NetworkFirst({
+    cacheName: 'course-teacher-api-v3',
+    plugins: [courseTeacherBgSyncPlugin]
+  }),
+  'PUT'
+);
+
+registerRoute(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ({ url }: { url: any }) => {
+    // Skip unsupported URL schemes
+    if (url.protocol === 'chrome-extension:' || 
+        url.protocol === 'chrome:' ||
+        url.protocol === 'edge:' ||
+        url.protocol === 'brave:') {
+      return false;
+    }
+    return url.pathname.match(/\/api\/(courses|teachers).*/);
+  },
+  new NetworkFirst({
+    cacheName: 'course-teacher-api-v3',
+    plugins: [courseTeacherBgSyncPlugin]
+  }),
+  'DELETE'
+);
+
+// Handle sync events directly
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+self.addEventListener('sync', (event: any) => {
+  console.log('Sync event received:', event.tag);
+  
+  if (event.tag === 'taskSync') {
+    event.waitUntil(taskSyncQueue.replayRequests());
+  } else if (event.tag === 'routineSync') {
+    event.waitUntil(routineSyncQueue.replayRequests());
+  } else if (event.tag === 'courseTeacherSync') {
+    event.waitUntil(courseTeacherSyncQueue.replayRequests());
+  }
+});
 
 // Add a global error handler to catch unexpected errors
 self.addEventListener('error', (event) => {
@@ -480,4 +722,45 @@ self.addEventListener('error', (event) => {
 // Add an unhandled rejection handler
 self.addEventListener('unhandledrejection', (event) => {
   console.error('Service Worker unhandled rejection:', event.reason);
+});
+
+// Add a message handler for keep-alive pings
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'KEEP_ALIVE') {
+    console.log('Keep-alive ping received at', new Date(event.data.timestamp).toISOString());
+    
+    // Respond to the keep-alive to confirm service worker is active
+    if (event.source) {
+      event.source.postMessage({
+        type: 'KEEP_ALIVE_RESPONSE',
+        timestamp: Date.now()
+      });
+    }
+    
+    // Reset any internal timers to keep the service worker active
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    self.registration.active?.postMessage({
+      type: 'INTERNAL_KEEP_ALIVE'
+    });
+  } else if (event.data && event.data.type === 'SYNC_NOW') {
+    console.log('SYNC_NOW message received, attempting immediate sync');
+    
+    // Try to perform sync for all queues
+    Promise.allSettled([
+      taskSyncQueue.replayRequests(),
+      routineSyncQueue.replayRequests(),
+      courseTeacherSyncQueue.replayRequests()
+    ]).then(results => {
+      console.log('Sync attempts completed:', results);
+      
+      // Notify client that sync was attempted
+      if (event.source) {
+        event.source.postMessage({
+          type: 'SYNC_NOW_COMPLETED',
+          results: results.map(r => r.status)
+        });
+      }
+    });
+  }
 });
