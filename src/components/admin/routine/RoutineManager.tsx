@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { RoutineForm } from './RoutineForm';
 import { RoutineList } from './RoutineList';
 import { BulkSlotImport } from './BulkSlotImport';
-import { Calendar, Plus, Download, Upload, List, Grid, Settings, FileText, Filter } from 'lucide-react';
+import { Calendar, Plus, Download, Upload, List, Grid, Settings, FileText, Filter, RefreshCw } from 'lucide-react';
 import type { Routine, RoutineSlot } from '../../../types/routine';
 import type { Course } from '../../../types/course';
 import type { Teacher } from '../../../types/teacher';
+import { useRoutines } from '../../../hooks/useRoutines';
 
 // Define tab types for better organization
 type RoutineTab = 'list' | 'create' | 'import' | 'export' | 'settings';
@@ -42,9 +43,61 @@ export function RoutineManager({
   const [selectedRoutine, setSelectedRoutine] = useState<Routine | null>(null);
   const [activeTab, setActiveTab] = useState<RoutineTab>('list');
   const [filterSemester, setFilterSemester] = useState<string>('');
+  const [refreshing, setRefreshing] = useState(false);
+  
+  // Get loadRoutines from useRoutines hook for force refreshing
+  const { loadRoutines } = useRoutines();
 
   // Extract unique semester values for filtering
   const semesters = Array.from(new Set(routines.map(r => r.semester))).sort();
+
+  // Force refresh routine data from server
+  const forceRefreshRoutines = async () => {
+    setRefreshing(true);
+    try {
+      console.log('Admin: Force refreshing routine data');
+      await loadRoutines(true, true);
+    } catch (err) {
+      console.error('Error refreshing routine data:', err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Enhanced create routine with refresh
+  const handleCreateRoutine = async (routine: Omit<Routine, 'id' | 'createdAt'>) => {
+    const result = await onCreateRoutine(routine);
+    // Refresh data after creation
+    await forceRefreshRoutines();
+    return result;
+  };
+
+  // Enhanced update routine with refresh
+  const handleUpdateRoutine = async (id: string, updates: Partial<Routine>) => {
+    await onUpdateRoutine(id, updates);
+    // Refresh data after update
+    await forceRefreshRoutines();
+  };
+
+  // Enhanced delete routine with refresh
+  const handleDeleteRoutine = async (id: string) => {
+    await onDeleteRoutine(id);
+    // Refresh data after deletion
+    await forceRefreshRoutines();
+    // Reset selected routine if it was deleted
+    if (selectedRoutine && selectedRoutine.id === id) {
+      setSelectedRoutine(null);
+    }
+  };
+
+  // Enhanced bulk import with refresh
+  const handleBulkImportSlots = async (routineId: string, slots: any[]) => {
+    if (!onBulkImportSlots) return { success: 0, errors: [] };
+    const result = await onBulkImportSlots(routineId, slots);
+    // Refresh data after import
+    await forceRefreshRoutines();
+    return result;
+  };
 
   // Handle export of routine data
   const handleExportRoutine = () => {
@@ -94,6 +147,16 @@ export function RoutineManager({
         </div>
         
         <div className="flex items-center gap-2">
+          {/* Add refresh button */}
+          <button
+            onClick={forceRefreshRoutines}
+            disabled={refreshing}
+            className="p-2 text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 focus:outline-none disabled:opacity-50"
+            title="Refresh routine data"
+          >
+            <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
+          </button>
+          
           {semesters.length > 0 && (
             <div className="relative">
               <select
@@ -191,8 +254,8 @@ export function RoutineManager({
               teachers={teachers}
               selectedRoutine={selectedRoutine}
               onSelectRoutine={setSelectedRoutine}
-              onUpdateRoutine={onUpdateRoutine}
-              onDeleteRoutine={onDeleteRoutine}
+              onUpdateRoutine={handleUpdateRoutine}
+              onDeleteRoutine={handleDeleteRoutine}
               onAddSlot={onAddSlot}
               onUpdateSlot={onUpdateSlot}
               onDeleteSlot={onDeleteSlot}
@@ -204,7 +267,7 @@ export function RoutineManager({
           {activeTab === 'create' && (
             <div className="max-w-2xl mx-auto">
               <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Create New Routine</h3>
-              <RoutineForm onSubmit={onCreateRoutine} />
+              <RoutineForm onSubmit={handleCreateRoutine} />
             </div>
           )}
           
@@ -220,7 +283,7 @@ export function RoutineManager({
                 routineId={selectedRoutine.id}
                 teachers={teachers}
                 courses={courses}
-                onImportSlots={onBulkImportSlots}
+                onImportSlots={handleBulkImportSlots}
               />
             </div>
           )}

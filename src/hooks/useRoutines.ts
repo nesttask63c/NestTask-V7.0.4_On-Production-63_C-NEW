@@ -22,17 +22,93 @@ import { saveToIndexedDB, getAllFromIndexedDB, STORES, getByIdFromIndexedDB, cle
 // Define timestamp for cached data
 const CACHE_TIMESTAMP_KEY = 'routines_last_fetched';
 
+// Add this new function to help diagnose routine service issues
+const runServiceDiagnostics = async () => {
+  console.log('Running routine service diagnostics...');
+  const diagnosticResults = {
+    supabaseConnection: false,
+    routineTableAccess: false,
+    routineSlotsTableAccess: false,
+    teachersTableAccess: false,
+    coursesTableAccess: false,
+    issues: [] as string[]
+  };
+  
+  try {
+    // Test basic connection to Supabase
+    const { data: connectionTest, error: connectionError } = await supabase.from('_health').select('*').limit(1);
+    diagnosticResults.supabaseConnection = !connectionError;
+    
+    if (connectionError) {
+      diagnosticResults.issues.push(`Connection to Supabase failed: ${connectionError.message}`);
+    }
+    
+    // Test access to routines table
+    const { data: routinesTest, error: routinesError } = await supabase.from('routines').select('count').limit(1);
+    diagnosticResults.routineTableAccess = !routinesError;
+    
+    if (routinesError) {
+      diagnosticResults.issues.push(`Access to routines table failed: ${routinesError.message}`);
+    }
+    
+    // Test access to routine_slots table
+    const { data: slotsTest, error: slotsError } = await supabase.from('routine_slots').select('count').limit(1);
+    diagnosticResults.routineSlotsTableAccess = !slotsError;
+    
+    if (slotsError) {
+      diagnosticResults.issues.push(`Access to routine_slots table failed: ${slotsError.message}`);
+    }
+    
+    // Test access to teachers table
+    const { data: teachersTest, error: teachersError } = await supabase.from('teachers').select('count').limit(1);
+    diagnosticResults.teachersTableAccess = !teachersError;
+    
+    if (teachersError) {
+      diagnosticResults.issues.push(`Access to teachers table failed: ${teachersError.message}`);
+    }
+    
+    // Test access to courses table
+    const { data: coursesTest, error: coursesError } = await supabase.from('courses').select('count').limit(1);
+    diagnosticResults.coursesTableAccess = !coursesError;
+    
+    if (coursesError) {
+      diagnosticResults.issues.push(`Access to courses table failed: ${coursesError.message}`);
+    }
+    
+    console.log('Routine service diagnostics results:', diagnosticResults);
+    return diagnosticResults;
+  } catch (error: any) {
+    console.error('Error running diagnostics:', error);
+    diagnosticResults.issues.push(`Unexpected error during diagnostics: ${error.message}`);
+    return diagnosticResults;
+  }
+};
+
 export function useRoutines() {
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [syncInProgress, setSyncInProgress] = useState(false);
+  const [diagnosticState, setDiagnosticState] = useState<any>(null);
   const isOffline = useOfflineStatus();
 
-  // Improved load routines function with cache validation
-  const loadRoutines = useCallback(async (forceRefresh = false) => {
+  // Improved load routines function with cache validation and retry
+  const loadRoutines = useCallback(async (forceRefresh = false, isAdminView = false) => {
     try {
       setLoading(true);
+      setError(null);
+      
+      // When in admin view, always force a fresh fetch to ensure accurate data
+      if (isAdminView) {
+        forceRefresh = true;
+        console.log('Admin view detected, bypassing cache and loading fresh routine data');
+      }
+
+      // If forceRefresh is true, invalidate the cache by removing the timestamp
+      if (forceRefresh) {
+        console.log('Force refresh requested, invalidating cache');
+        localStorage.removeItem(CACHE_TIMESTAMP_KEY);
+      }
       
       if (isOffline) {
         // When offline, get routines from IndexedDB
@@ -41,6 +117,9 @@ export function useRoutines() {
         
         if (offlineRoutines && offlineRoutines.length > 0) {
           console.log('Found offline routines:', offlineRoutines.length);
+          // Check if the slots data is there
+          const hasSlots = offlineRoutines.some(r => r.slots && r.slots.length > 0);
+          console.log('Offline routines have slots:', hasSlots);
           setRoutines(offlineRoutines);
         } else {
           console.log('No offline routines found');
@@ -50,8 +129,8 @@ export function useRoutines() {
         // Check cache validity and only fetch if necessary
         const lastFetchedTimestamp = localStorage.getItem(CACHE_TIMESTAMP_KEY);
         const currentTime = Date.now();
-        const cacheDurationMs = 5 * 60 * 1000; // 5 minutes cache duration
-        const isCacheValid = lastFetchedTimestamp && 
+        const cacheDurationMs = isAdminView ? 0 : 5 * 60 * 1000; // No cache for admin, 5 minutes for regular users
+        const isCacheValid = !isAdminView && !forceRefresh && lastFetchedTimestamp && 
                             (currentTime - parseInt(lastFetchedTimestamp)) < cacheDurationMs;
         
         // Skip fetch if cache is valid and not forcing refresh
@@ -59,22 +138,125 @@ export function useRoutines() {
           console.log('Using cached routines data (valid for 5 minutes)');
           const cachedRoutines = await getAllFromIndexedDB(STORES.ROUTINES);
           if (cachedRoutines && cachedRoutines.length > 0) {
-            setRoutines(cachedRoutines);
-            setLoading(false);
-            return;
+            // Check if slots data exists in the cache
+            const hasSlots = cachedRoutines.some(r => r.slots && r.slots.length > 0);
+            console.log('Cached routines have slots:', hasSlots);
+            
+            if (hasSlots) {
+              setRoutines(cachedRoutines);
+              setLoading(false);
+              return;
+            } else {
+              console.log('Cached routines missing slot data, forcing refresh');
+              // If slots are missing, force a refresh
+              forceRefresh = true;
+            }
           }
         }
         
-        // Fetch fresh data if cache is invalid or forced refresh
-        console.log('Fetching fresh routine data from server');
-        const data = await fetchRoutines();
+        // Fetch with retry
+        let fetchSuccess = false;
+        let fetchError: any = null;
+        let fetchedData: Routine[] = [];
         
-        // Update local state
-        setRoutines(data);
+        // Try up to 3 times with increasing delays
+        for (let attempt = 0; attempt < 3 && !fetchSuccess; attempt++) {
+          try {
+            if (attempt > 0) {
+              console.log(`Retry attempt ${attempt} for fetching routines...`);
+              await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Exponential backoff
+            }
+            
+            console.log('Fetching fresh routine data from server');
+            fetchedData = await fetchRoutines();
+            
+            // Verify that slots data is present
+            const hasSlots = fetchedData.some(r => r.slots && r.slots.length > 0);
+            console.log(`Fetched ${fetchedData.length} routines with slots data:`, hasSlots);
+            
+            if (!hasSlots && fetchedData.length > 0) {
+              // If we have routines but no slots, try fetching directly
+              console.log('No slots found, attempting direct slot fetch');
+              for (const routine of fetchedData) {
+                try {
+                  const { data: slots } = await supabase
+                    .from('routine_slots')
+                    .select('*')
+                    .eq('routine_id', routine.id);
+                  
+                  if (slots && slots.length > 0) {
+                    console.log(`Found ${slots.length} slots for routine ${routine.id}`);
+                    routine.slots = slots.map((slot: any) => ({
+                      id: slot.id,
+                      routineId: routine.id,
+                      dayOfWeek: slot.day_of_week,
+                      startTime: slot.start_time,
+                      endTime: slot.end_time,
+                      roomNumber: slot.room_number || '',
+                      section: slot.section || '',
+                      courseId: slot.course_id || '',
+                      teacherId: slot.teacher_id || '',
+                      courseName: '',  // Will be populated on demand
+                      teacherName: '', // Will be populated on demand
+                      createdAt: slot.created_at
+                    }));
+                  }
+                } catch (slotError) {
+                  console.error(`Error fetching slots for routine ${routine.id}:`, slotError);
+                }
+              }
+            }
+            
+            fetchSuccess = true;
+          } catch (err) {
+            fetchError = err;
+            console.warn(`Fetch attempt ${attempt + 1} failed:`, err);
+          }
+        }
         
-        // Update cache timestamp and save to IndexedDB
-        localStorage.setItem(CACHE_TIMESTAMP_KEY, currentTime.toString());
-        await saveToIndexedDB(STORES.ROUTINES, data);
+        if (fetchSuccess) {
+          // Update local state
+          setRoutines(fetchedData);
+          
+          // Always update the cache timestamp when successfully fetching data
+          // This ensures the timestamp reflects the most recent successful fetch
+          localStorage.setItem(CACHE_TIMESTAMP_KEY, currentTime.toString());
+          
+          // Clear existing cache and save the new data to IndexedDB
+          try {
+            await clearIndexedDBStore(STORES.ROUTINES);
+            await saveToIndexedDB(STORES.ROUTINES, fetchedData);
+            console.log('Successfully updated routine cache in IndexedDB');
+          } catch (cacheError) {
+            console.error('Error updating routine cache:', cacheError);
+          }
+          
+          // Ensure slots data is loaded for the active routine
+          const activeRoutine = fetchedData.find(r => r.isActive);
+          if (activeRoutine && (!activeRoutine.slots || activeRoutine.slots.length === 0)) {
+            console.log('Forcing slots load for active routine');
+            await refreshRoutineSlots(activeRoutine.id);
+          }
+        } else {
+          // All retry attempts failed
+          console.error('All fetch attempts for routines failed:', fetchError);
+          setError(fetchError?.message || 'Failed to load routines after multiple attempts');
+          
+          // Try to load from cache as fallback
+          try {
+            const offlineRoutines = await getAllFromIndexedDB(STORES.ROUTINES);
+            if (offlineRoutines && offlineRoutines.length > 0) {
+              console.log('Using cached routines due to fetch error');
+              setRoutines(offlineRoutines);
+            }
+          } catch (offlineErr) {
+            console.error('Error loading fallback routines:', offlineErr);
+          }
+          
+          // Run diagnostics if all attempts failed
+          const diagnostics = await runServiceDiagnostics();
+          setDiagnosticState(diagnostics);
+        }
       }
     } catch (err: any) {
       console.error('Error loading routines:', err);
@@ -96,6 +278,105 @@ export function useRoutines() {
       setLoading(false);
     }
   }, [isOffline]);
+
+  // Add a new function to refresh slots for a specific routine
+  const refreshRoutineSlots = async (routineId: string) => {
+    if (!routineId) return;
+    
+    console.log(`Refreshing slots for routine ${routineId}`);
+    try {
+      const { data: slots, error } = await supabase
+        .from('routine_slots')
+        .select('*')
+        .eq('routine_id', routineId);
+        
+      if (error) {
+        console.error(`Error fetching slots for routine ${routineId}:`, error);
+        return;
+      }
+      
+      if (!slots || slots.length === 0) {
+        console.log(`No slots found for routine ${routineId}`);
+        return;
+      }
+      
+      console.log(`Found ${slots.length} slots for routine ${routineId}`);
+      
+      // Get course and teacher info for the slots
+      const courseIds = new Set(slots.map((s: any) => s.course_id).filter(Boolean));
+      const teacherIds = new Set(slots.map((s: any) => s.teacher_id).filter(Boolean));
+      
+      let courses: any[] = [];
+      let teachers: any[] = [];
+      
+      if (courseIds.size > 0) {
+        const { data } = await supabase
+          .from('courses')
+          .select('id,name,code')
+          .in('id', Array.from(courseIds));
+        courses = data || [];
+      }
+      
+      if (teacherIds.size > 0) {
+        const { data } = await supabase
+          .from('teachers')
+          .select('id,name')
+          .in('id', Array.from(teacherIds));
+        teachers = data || [];
+      }
+      
+      const courseMap = new Map();
+      const teacherMap = new Map();
+      
+      courses.forEach(c => courseMap.set(c.id, { name: c.name, code: c.code }));
+      teachers.forEach(t => teacherMap.set(t.id, t.name));
+      
+      // Create properly formatted slot objects
+      const formattedSlots = slots.map((slot: any) => {
+        const courseInfo = courseMap.get(slot.course_id) || {};
+        const teacherName = teacherMap.get(slot.teacher_id) || '';
+        
+        return {
+          id: slot.id,
+          routineId: slot.routine_id,
+          dayOfWeek: slot.day_of_week,
+          startTime: slot.start_time,
+          endTime: slot.end_time,
+          roomNumber: slot.room_number || '',
+          section: slot.section || '',
+          courseId: slot.course_id || '',
+          teacherId: slot.teacher_id || '',
+          courseName: courseInfo.name || '',
+          courseCode: courseInfo.code || '',
+          teacherName: teacherName || '',
+          createdAt: slot.created_at
+        };
+      });
+      
+      // Update the routine in state with the fetched slots
+      setRoutines(prev => 
+        prev.map(routine => 
+          routine.id === routineId
+            ? { ...routine, slots: formattedSlots }
+            : routine
+        )
+      );
+      
+      // Also update in IndexedDB
+      const updatedRoutines = await getAllFromIndexedDB(STORES.ROUTINES);
+      if (updatedRoutines) {
+        const updatedData = updatedRoutines.map(routine => 
+          routine.id === routineId
+            ? { ...routine, slots: formattedSlots }
+            : routine
+        );
+        await saveToIndexedDB(STORES.ROUTINES, updatedData);
+      }
+      
+    } catch (err) {
+      console.error(`Error refreshing slots for routine ${routineId}:`, err);
+    }
+  };
 
   // New function to prefetch related data for faster loading
   const prefetchRoutineData = useCallback(async () => {
@@ -827,11 +1108,22 @@ export function useRoutines() {
     }
   }, [isOffline, loadRoutines]);
 
+  // Add the diagnostics function to the exported hook
+  const checkServiceHealth = useCallback(async () => {
+    const diagnostics = await runServiceDiagnostics();
+    setDiagnosticState(diagnostics);
+    return diagnostics;
+  }, []);
+
   return {
     routines,
     loading,
     error,
     syncInProgress,
+    diagnosticState,
+    checkServiceHealth,
+    refreshRoutineSlots,
+    prefetchRoutineData,
     loadRoutines,
     syncOfflineChanges,
     createRoutine,
@@ -840,6 +1132,8 @@ export function useRoutines() {
     addRoutineSlot,
     updateRoutineSlot,
     deleteRoutineSlot,
+    bulkImportSlots,
+    exportRoutine,
     activateRoutine: async (routineId: string) => {
       try {
         setError(null);
@@ -938,11 +1232,7 @@ export function useRoutines() {
         throw err;
       }
     },
-    bulkImportSlots,
-    exportRoutine,
     getSemesters,
-    getRoutinesBySemester,
-    refreshRoutines,
-    prefetchRoutineData
+    getRoutinesBySemester
   };
 }

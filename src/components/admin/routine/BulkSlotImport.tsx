@@ -327,67 +327,103 @@ export function BulkSlotImport({ routineId, teachers, courses, onImportSlots }: 
   };
   
   const handleImport = async () => {
-    if (!slotsWithStatus.length) return;
-    
-    // Check if all slots have teacher and course selections
-    const missingSelections = slotsWithStatus.filter(
-      slot => !slot._teacherId || !slot._courseId
-    );
-    
-    if (missingSelections.length > 0) {
-      toast.error(`${missingSelections.length} slot(s) are missing teacher or course selections.`);
+    if (!data || !validation?.valid) {
+      toast.error('Please upload and validate a valid JSON file before importing');
       return;
     }
     
     setLoading(true);
-    setProgressStatus('Preparing import...');
+    setProgressStatus('Preparing slots for import...');
     
     try {
-      // Prepare data for import in the expected format for the backend
-      const preparedData = slotsWithStatus.map(slot => {
-        const teacherObj = teachers.find(t => t.id === slot._teacherId);
-        const courseObj = courses.find(c => c.id === slot._courseId);
+      // Get the slots with all their assigned data (including manually selected)
+      const importReady = slotsWithStatus.map(slot => {
+        // Skip slots with missing required data
+        if (!slot._teacherId || !slot._courseId) {
+          throw new Error(`Slot #${slot.index + 1} is missing required teacher or course selection`);
+        }
         
-        // Format course string as "Title - Code" for backend compatibility
-        const courseFormatted = courseObj 
-          ? `${courseObj.name} - ${courseObj.code}`
-          : slot.course || `${slot.course_title || ''} - ${slot.course_code || ''}`;
+        // Convert time to 24-hour format for database
+        const convertTo24Hour = (timeStr: string): string => {
+          const [time, period] = timeStr.split(' ');
+          let [hours, minutes] = time.split(':').map(Number);
+          
+          if (period === 'PM' && hours < 12) hours += 12;
+          if (period === 'AM' && hours === 12) hours = 0;
+          
+          return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+        };
         
+        // Create the slot object
         return {
           day: slot.day,
-          start_time: slot.start_time,
-          end_time: slot.end_time,
-          course: courseFormatted,
-          teacher: teacherObj?.name || slot.teacher,
-          room_number: slot.room_number,
-          section: slot.section,
-          _teacherId: slot._teacherId,  // Pass these through to help the backend
+          start_time: convertTo24Hour(slot.start_time),
+          end_time: convertTo24Hour(slot.end_time),
+          room_number: slot.room_number || '',
+          section: slot.section || '',
+          _teacherId: slot._teacherId,
           _courseId: slot._courseId
         };
       });
       
-      setProgressStatus('Importing slots...');
-      const result = await onImportSlots(routineId, preparedData);
-      setImportResult(result);
+      setProgressStatus(`Importing ${importReady.length} slots...`);
       
-      // Clear the file input if successful
-      if (result.success > 0 && result.errors.length === 0) {
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
+      // Process in smaller batches to avoid overwhelming the database
+      const batchSize = 10;
+      const batches = [];
+      
+      for (let i = 0; i < importReady.length; i += batchSize) {
+        batches.push(importReady.slice(i, i + batchSize));
+      }
+      
+      let totalSuccess = 0;
+      let allErrors: any[] = [];
+      
+      // Process each batch
+      for (let i = 0; i < batches.length; i++) {
+        setProgressStatus(`Processing batch ${i+1}/${batches.length}...`);
+        
+        try {
+          const batchResult = await onImportSlots(routineId, batches[i]);
+          totalSuccess += batchResult.success;
+          allErrors = [...allErrors, ...batchResult.errors];
+        } catch (error: any) {
+          console.error('Error processing batch:', error);
+          allErrors.push({
+            message: `Batch ${i+1} failed: ${error.message || 'Unknown error'}`,
+            slots: batches[i]
+          });
         }
-        setFile(null);
-        setData(null);
-        setValidation(null);
-        setSlotsWithStatus([]);
-        toast.success(`Successfully imported ${result.success} slot(s).`);
+        
+        // Add a small delay between batches to prevent database rate limiting
+        if (i < batches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+      }
+      
+      // Show final result
+      setImportResult({
+        success: totalSuccess,
+        errors: allErrors
+      });
+      
+      if (totalSuccess > 0) {
+        toast.success(`Successfully imported ${totalSuccess} slots`);
+      }
+      
+      if (allErrors.length > 0) {
+        toast.error(`Failed to import ${allErrors.length} slots`);
       }
     } catch (error: any) {
-      console.error('Import failed:', error);
-      toast.error('Import failed. Please try again.');
+      console.error('Import error:', error);
       setImportResult({
         success: 0,
-        errors: [{ message: 'Import failed: ' + (error.message || 'Unknown error') }]
+        errors: [{
+          message: error.message || 'Unknown import error',
+          error
+        }]
       });
+      toast.error(`Import failed: ${error.message || 'Unknown error'}`);
     } finally {
       setLoading(false);
       setProgressStatus('');

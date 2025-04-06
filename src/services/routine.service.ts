@@ -3,7 +3,7 @@ import type { Routine, RoutineSlot } from '../types/routine';
 
 export async function fetchRoutines(): Promise<Routine[]> {
   try {
-    console.log('Using optimized approach for fetching routines');
+    console.log('Fetching routines data from Supabase');
     
     // Make a single query to fetch routines with slots and prefetch all related data
     const { data: routines, error: routinesError } = await supabase
@@ -24,54 +24,152 @@ export async function fetchRoutines(): Promise<Routine[]> {
       `)
       .order('created_at', { ascending: false });
 
-    if (routinesError) throw routinesError;
+    if (routinesError) {
+      console.error('Error fetching routines:', routinesError);
+      throw routinesError;
+    }
+    
+    if (!routines || routines.length === 0) {
+      console.log('No routines found in database');
+      return [];
+    }
 
-    // Fetch required data in parallel
-    const [coursesResponse, teachersResponse] = await Promise.all([
-      supabase.from('courses').select('id,name,code'),
-      supabase.from('teachers').select('id,name')
-    ]);
+    console.log(`Found ${routines.length} routines in database`);
+    
+    // Check if any of the routines have slots
+    const routinesWithSlots = routines.filter(r => r.slots && r.slots.length > 0);
+    console.log(`${routinesWithSlots.length} of ${routines.length} routines have slots data`);
+    
+    // If some routines are missing slots, do a direct query for those
+    if (routinesWithSlots.length < routines.length) {
+      const routinesWithoutSlots = routines.filter(r => !r.slots || r.slots.length === 0);
+      console.log(`Fetching slots separately for ${routinesWithoutSlots.length} routines`);
+      
+      for (const routine of routinesWithoutSlots) {
+        try {
+          const { data: slots, error: slotsError } = await supabase
+            .from('routine_slots')
+            .select('*')
+            .eq('routine_id', routine.id);
+            
+          if (slotsError) {
+            console.error(`Error fetching slots for routine ${routine.id}:`, slotsError);
+          } else if (slots && slots.length > 0) {
+            console.log(`Found ${slots.length} slots for routine ${routine.id}`);
+            routine.slots = slots;
+          } else {
+            console.log(`No slots found for routine ${routine.id}`);
+            routine.slots = [];
+          }
+        } catch (err) {
+          console.error(`Error in separate slots fetch for routine ${routine.id}:`, err);
+        }
+      }
+    }
+
+    // Extract unique course and teacher IDs for batch fetching
+    const courseIds = new Set<string>();
+    const teacherIds = new Set<string>();
+    
+    routines.forEach(routine => {
+      if (!routine.slots) return;
+      
+      routine.slots.forEach((slot: any) => {
+        if (slot.course_id) courseIds.add(slot.course_id);
+        if (slot.teacher_id) teacherIds.add(slot.teacher_id);
+      });
+    });
+    
+    console.log(`Need to fetch ${courseIds.size} courses and ${teacherIds.size} teachers for slots`);
+    
+    // Define type for supabase responses
+    type SupabaseResponse<T> = { data: T | null; error: any };
+    
+    // Only fetch courses and teachers if we have IDs
+    let coursesResponse: SupabaseResponse<any[]>;
+    let teachersResponse: SupabaseResponse<any[]>;
+    
+    if (courseIds.size > 0) {
+      coursesResponse = await supabase
+        .from('courses')
+        .select('id,name,code')
+        .in('id', Array.from(courseIds));
+    } else {
+      coursesResponse = { data: [], error: null };
+    }
+    
+    if (teacherIds.size > 0) {
+      teachersResponse = await supabase
+        .from('teachers')
+        .select('id,name')
+        .in('id', Array.from(teacherIds));
+    } else {
+      teachersResponse = { data: [], error: null };
+    }
+    
+    if (coursesResponse.error) {
+      console.error('Error fetching courses:', coursesResponse.error);
+    }
+    
+    if (teachersResponse.error) {
+      console.error('Error fetching teachers:', teachersResponse.error);
+    }
     
     const allCourses = coursesResponse.data || [];
     const allTeachers = teachersResponse.data || [];
 
+    console.log(`Fetched ${routines.length} routines, ${allCourses.length} courses, ${allTeachers.length} teachers`);
+
     // Create lookup maps for faster access
-    const courseMap = new Map();
-    const teacherMap = new Map();
+    const courseMap = new Map<string, {name?: string; code?: string}>();
+    const teacherMap = new Map<string, string>();
     
     allCourses.forEach(course => courseMap.set(course.id, { name: course.name, code: course.code }));
     allTeachers.forEach(teacher => teacherMap.set(teacher.id, teacher.name));
 
-    return routines.map(routine => ({
-      id: routine.id,
-      name: routine.name,
-      description: routine.description,
-      semester: routine.semester,
-      isActive: routine.is_active,
-      createdAt: routine.created_at,
-      createdBy: routine.created_by,
-      slots: routine.slots?.map((slot: any) => {
-        // Get course and teacher info from maps (constant time lookup)
-        const courseInfo = courseMap.get(slot.course_id) || {};
-        const teacherName = teacherMap.get(slot.teacher_id) || '';
-        
-        return {
-          id: slot.id,
-          routineId: routine.id,
-          courseId: slot.course_id,
-          teacherId: slot.teacher_id,
-          courseName: courseInfo.name || '',
-          courseCode: courseInfo.code || '',
-          teacherName: teacherName,
-          dayOfWeek: slot.day_of_week,
-          startTime: slot.start_time,
-          endTime: slot.end_time,
-          roomNumber: slot.room_number,
-          section: slot.section,
-          createdAt: slot.created_at
-        };
-      })
-    }));
+    // Map the database results to our application model
+    const mappedRoutines = routines.map(routine => {
+      // Check if routine has slots
+      const hasSlots = routine.slots && routine.slots.length > 0;
+      if (!hasSlots) {
+        console.log(`Routine ${routine.id} (${routine.name}) has no slots after processing`);
+      } else {
+        console.log(`Routine ${routine.id} (${routine.name}) has ${routine.slots.length} slots`);
+      }
+      
+      return {
+        id: routine.id,
+        name: routine.name,
+        description: routine.description,
+        semester: routine.semester,
+        isActive: routine.is_active,
+        createdAt: routine.created_at,
+        createdBy: routine.created_by,
+        slots: (routine.slots || []).map((slot: any) => {
+          // Get course and teacher info from maps (constant time lookup)
+          const courseInfo = courseMap.get(slot.course_id) || {};
+          const teacherName = teacherMap.get(slot.teacher_id) || '';
+          
+          return {
+            id: slot.id,
+            routineId: routine.id,
+            courseId: slot.course_id || '',
+            teacherId: slot.teacher_id || '',
+            courseName: courseInfo.name || '',
+            courseCode: courseInfo.code || '',
+            teacherName: teacherName || '',
+            dayOfWeek: slot.day_of_week,
+            startTime: slot.start_time,
+            endTime: slot.end_time,
+            roomNumber: slot.room_number || '',
+            section: slot.section || '',
+            createdAt: slot.created_at
+          };
+        })
+      };
+    });
+    
+    return mappedRoutines;
   } catch (error) {
     console.error('Error fetching routines:', error);
     throw error;
@@ -233,6 +331,8 @@ export async function addRoutineSlot(
         if (error.message.includes('column "course_name" of relation "routine_slots" does not exist') ||
             error.message.includes('column "teacher_name" of relation "routine_slots" does not exist')) {
           
+          console.log('Falling back to insertion without course_name/teacher_name columns');
+          
           // Fallback: insert without the missing columns
           const { data: fallbackData, error: fallbackError } = await supabase
             .from('routine_slots')
@@ -250,67 +350,63 @@ export async function addRoutineSlot(
             .single();
             
           if (fallbackError) {
-            console.error('Database error (fallback):', fallbackError);
-            throw new Error(`Failed to add routine slot: ${fallbackError.message}`);
+            console.error('Fallback insertion failed:', fallbackError);
+            throw fallbackError;
           }
           
           if (!fallbackData) {
-            console.error('No data returned from database (fallback)');
-            throw new Error('No data returned from database');
+            console.error('No data returned from fallback insertion');
+            throw new Error('Failed to create routine slot: No data returned');
           }
           
-          // Return the slot with the course/teacher names we have
+          // Return the fallback data with manually added course/teacher names
           return {
             id: fallbackData.id,
             routineId: fallbackData.routine_id,
-            courseId: fallbackData.course_id,
-            teacherId: fallbackData.teacher_id,
-            courseName: courseName || '',
-            teacherName: teacherName || '',
             dayOfWeek: fallbackData.day_of_week,
             startTime: fallbackData.start_time,
             endTime: fallbackData.end_time,
-            roomNumber: fallbackData.room_number,
-            section: fallbackData.section,
+            roomNumber: fallbackData.room_number || '',
+            section: fallbackData.section || '',
+            courseId: fallbackData.course_id || '',
+            teacherId: fallbackData.teacher_id || '',
+            courseName: courseName,
+            teacherName: teacherName,
             createdAt: fallbackData.created_at
           };
         } else {
-          // Some other error occurred
-          console.error('Database error:', error);
-          throw new Error(`Failed to add routine slot: ${error.message}`);
+          console.error('Error creating routine slot:', error);
+          throw error;
         }
       }
-
+      
       if (!data) {
-        console.error('No data returned from database');
-        throw new Error('No data returned from database');
+        console.error('No data returned from slot insertion');
+        throw new Error('Failed to create routine slot: No data returned');
       }
 
-      const result = {
+      // Return the data with proper mapping
+      return {
         id: data.id,
         routineId: data.routine_id,
-        courseId: data.course_id,
-        teacherId: data.teacher_id,
-        courseName: data.course_name || courseName || '',
-        teacherName: data.teacher_name || teacherName || '',
         dayOfWeek: data.day_of_week,
         startTime: data.start_time,
         endTime: data.end_time,
-        roomNumber: data.room_number,
-        section: data.section,
+        roomNumber: data.room_number || '',
+        section: data.section || '',
+        courseId: data.course_id || '',
+        teacherId: data.teacher_id || '',
+        courseName: courseName,
+        teacherName: teacherName,
         createdAt: data.created_at
       };
-      
-      console.log('Service: Successfully added routine slot', result);
-      
-      return result;
-    } catch (error: any) {
-      console.error('Error adding routine slot:', error);
-      throw new Error(error.message || 'Failed to add routine slot');
+    } catch (innerError) {
+      console.error('Error in slot insertion routine:', innerError);
+      throw innerError;
     }
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error adding routine slot:', error);
-    throw new Error(error.message || 'Failed to add routine slot');
+    throw error;
   }
 }
 
@@ -320,86 +416,135 @@ export async function updateRoutineSlot(
   updates: Partial<RoutineSlot>
 ): Promise<void> {
   try {
-    console.log('Updating routine slot:', { routineId, slotId, updates });
-    
-    // Get course name if not provided but courseId is updated
-    let courseName = updates.courseName;
-    if (updates.courseId && !courseName) {
-      const { data: course } = await supabase
-        .from('courses')
-        .select('name')
-        .eq('id', updates.courseId)
-        .single();
-      
-      if (course) {
-        courseName = course.name;
-      }
+    if (!routineId) {
+      throw new Error('Missing routine ID');
     }
+    
+    if (!slotId) {
+      throw new Error('Missing slot ID');
+    }
+    
+    console.log('Service: Updating routine slot', { routineId, slotId, updates });
 
-    // Get teacher name if not provided but teacherId is updated
-    let teacherName = updates.teacherName;
-    if (updates.teacherId && !teacherName) {
-      const { data: teacher } = await supabase
-        .from('teachers')
-        .select('name')
-        .eq('id', updates.teacherId)
-        .single();
-      
-      if (teacher) {
-        teacherName = teacher.name;
-      }
-    }
+    // Create database update object with correct field mappings
+    const dbUpdates: any = {};
     
+    // Map JavaScript camelCase fields to database snake_case fields
+    if (updates.dayOfWeek !== undefined) dbUpdates.day_of_week = updates.dayOfWeek;
+    if (updates.startTime !== undefined) dbUpdates.start_time = updates.startTime;
+    if (updates.endTime !== undefined) dbUpdates.end_time = updates.endTime;
+    if (updates.roomNumber !== undefined) dbUpdates.room_number = updates.roomNumber;
+    if (updates.section !== undefined) dbUpdates.section = updates.section;
+    if (updates.courseId !== undefined) dbUpdates.course_id = updates.courseId;
+    if (updates.teacherId !== undefined) dbUpdates.teacher_id = updates.teacherId;
+
+    // Try to update course_name and teacher_name if available
     try {
-      // First try updating with course_name and teacher_name fields
-      const updateFields: any = {
-        course_id: updates.courseId,
-        teacher_id: updates.teacherId,
-        day_of_week: updates.dayOfWeek,
-        start_time: updates.startTime,
-        end_time: updates.endTime,
-        room_number: updates.roomNumber,
-        section: updates.section,
-        course_name: courseName,
-        teacher_name: teacherName
-      };
+      // Get current slot data to compare and see what needs updating
+      const { data: currentSlot, error: getError } = await supabase
+        .from('routine_slots')
+        .select('*')
+        .eq('id', slotId)
+        .eq('routine_id', routineId)
+        .single();
+        
+      if (getError) {
+        console.error('Error retrieving current slot data:', getError);
+        throw getError;
+      }
       
+      if (!currentSlot) {
+        throw new Error(`Slot ${slotId} not found in routine ${routineId}`);
+      }
+      
+      // If courseId changed, update course name
+      if (updates.courseId && updates.courseId !== currentSlot.course_id) {
+        try {
+          const { data: course } = await supabase
+            .from('courses')
+            .select('name')
+            .eq('id', updates.courseId)
+            .single();
+            
+          if (course) {
+            dbUpdates.course_name = course.name;
+          }
+        } catch (courseError) {
+          console.warn('Could not fetch course name, continuing without it:', courseError);
+        }
+      }
+      
+      // If teacherId changed, update teacher name
+      if (updates.teacherId && updates.teacherId !== currentSlot.teacher_id) {
+        try {
+          const { data: teacher } = await supabase
+            .from('teachers')
+            .select('name')
+            .eq('id', updates.teacherId)
+            .single();
+            
+          if (teacher) {
+            dbUpdates.teacher_name = teacher.name;
+          }
+        } catch (teacherError) {
+          console.warn('Could not fetch teacher name, continuing without it:', teacherError);
+        }
+      }
+      
+      // First try with course_name and teacher_name
       const { error } = await supabase
         .from('routine_slots')
-        .update(updateFields)
+        .update(dbUpdates)
         .eq('id', slotId)
         .eq('routine_id', routineId);
 
       if (error) {
-        // If we get an error about missing columns, try without those columns
+        // If columns don't exist, retry without those columns
         if (error.message.includes('column "course_name" of relation "routine_slots" does not exist') ||
             error.message.includes('column "teacher_name" of relation "routine_slots" does not exist')) {
           
-          // Remove the problematic fields
-          delete updateFields.course_name;
-          delete updateFields.teacher_name;
+          console.log('Columns course_name/teacher_name not available, retrying update without them');
+          
+          // Remove the course_name and teacher_name fields
+          const { course_name, teacher_name, ...cleanedUpdates } = dbUpdates;
           
           const { error: fallbackError } = await supabase
             .from('routine_slots')
-            .update(updateFields)
+            .update(cleanedUpdates)
             .eq('id', slotId)
             .eq('routine_id', routineId);
             
           if (fallbackError) {
-            console.error('Database error (fallback):', fallbackError);
+            console.error('Fallback update failed:', fallbackError);
             throw fallbackError;
           }
         } else {
-          // Some other error
-          console.error('Database error:', error);
+          console.error('Error updating routine slot:', error);
           throw error;
         }
       }
-
-      console.log('Successfully updated routine slot');
-    } catch (error) {
-      console.error('Error updating routine slot:', error);
-      throw error;
+      
+      // Verify the update was successful by fetching the updated record
+      const { data: updatedSlot, error: verifyError } = await supabase
+        .from('routine_slots')
+        .select('*')
+        .eq('id', slotId)
+        .eq('routine_id', routineId)
+        .single();
+        
+      if (verifyError) {
+        console.warn('Could not verify slot update, but update may have succeeded:', verifyError);
+        return;
+      }
+      
+      if (!updatedSlot) {
+        throw new Error('Slot update verification failed: Could not find updated slot');
+      }
+      
+      console.log('Slot update successful and verified');
+    } catch (innerError) {
+      console.error('Error during slot update process:', innerError);
+      throw innerError;
     }
   } catch (error) {
     console.error('Error updating routine slot:', error);
@@ -409,13 +554,72 @@ export async function updateRoutineSlot(
 
 export async function deleteRoutineSlot(routineId: string, slotId: string): Promise<void> {
   try {
+    if (!routineId) {
+      throw new Error('Missing routine ID');
+    }
+    
+    if (!slotId) {
+      throw new Error('Missing slot ID');
+    }
+    
+    console.log('Service: Deleting routine slot', { routineId, slotId });
+    
+    // First verify the slot exists and belongs to the routine
+    const { data: slot, error: fetchError } = await supabase
+      .from('routine_slots')
+      .select('id')
+      .eq('id', slotId)
+      .eq('routine_id', routineId)
+      .single();
+      
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        // Not found
+        console.warn(`Slot ${slotId} not found in routine ${routineId}, considering deletion successful`);
+        return;
+      }
+      console.error('Error verifying slot before deletion:', fetchError);
+      throw fetchError;
+    }
+    
+    if (!slot) {
+      console.warn(`Slot ${slotId} not found in routine ${routineId}, considering deletion successful`);
+      return;
+    }
+    
+    // Proceed with deletion
     const { error } = await supabase
       .from('routine_slots')
       .delete()
       .eq('id', slotId)
       .eq('routine_id', routineId);
 
-    if (error) throw error;
+    if (error) {
+      console.error('Error deleting routine slot:', error);
+      throw error;
+    }
+    
+    // Verify deletion was successful
+    const { data: checkSlot, error: checkError } = await supabase
+      .from('routine_slots')
+      .select('id')
+      .eq('id', slotId)
+      .eq('routine_id', routineId)
+      .single();
+      
+    if (checkError && checkError.code !== 'PGRST116') {
+      // If error isn't "not found", there's a different problem
+      console.error('Error verifying slot deletion:', checkError);
+      throw checkError;
+    }
+    
+    if (checkSlot) {
+      // If we still find the slot, deletion failed
+      console.error('Slot deletion verification failed: Slot still exists');
+      throw new Error('Failed to delete slot: Record still exists after deletion attempt');
+    }
+    
+    console.log('Slot deleted successfully');
   } catch (error) {
     console.error('Error deleting routine slot:', error);
     throw error;

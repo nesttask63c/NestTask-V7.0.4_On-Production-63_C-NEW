@@ -75,7 +75,8 @@ export function AdminDashboard({
     deleteRoutineSlot,
     activateRoutine,
     deactivateRoutine,
-    bulkImportSlots
+    bulkImportSlots,
+    loadRoutines
   } = useRoutines();
 
   const {
@@ -102,6 +103,16 @@ export function AdminDashboard({
       window.removeEventListener('resize', checkMobileView);
     };
   }, []);
+
+  // Load fresh routine data for admin view
+  useEffect(() => {
+    // When admin dashboard loads or when tab changes to routine, 
+    // force a refresh of routine data from the server
+    if (activeTab === 'routine') {
+      console.log('Loading fresh routine data for admin view');
+      loadRoutines(true, true);
+    }
+  }, [activeTab, loadRoutines]);
 
   const handleDeleteUser = async (userId: string) => {
     try {
