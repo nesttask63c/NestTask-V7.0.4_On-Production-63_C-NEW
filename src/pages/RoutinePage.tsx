@@ -373,18 +373,6 @@ export function RoutinePage() {
             </div>
             
             <div className="flex items-center gap-2">
-              {!isOffline && (
-                <button 
-                  onClick={loadFreshRoutineData}
-                  disabled={refreshing}
-                  className="p-2 bg-white dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 disabled:opacity-50"
-                  aria-label="Refresh data"
-                  title="Refresh routine data"
-                >
-                  <RefreshCw className={`w-5 h-5 text-gray-500 dark:text-gray-400 ${refreshing ? 'animate-spin' : ''}`} />
-                </button>
-              )}
-              
               <button 
                 onClick={() => setShowMobileSearch(!showMobileSearch)}
                 className="p-2 bg-white dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600"
@@ -478,18 +466,6 @@ export function RoutinePage() {
                 <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
                 <ChevronRight className="absolute right-3 top-1/2 transform -translate-y-1/2 rotate-90 text-gray-400 w-4 h-4" />
               </div>
-            )}
-
-            {!isOffline && (
-              <button 
-                onClick={loadFreshRoutineData}
-                disabled={refreshing}
-                className="p-2 bg-white dark:bg-gray-700 rounded-xl border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors disabled:opacity-50"
-                aria-label="Refresh data"
-                title="Refresh routine data"
-              >
-                <RefreshCw className={`w-5 h-5 text-gray-500 dark:text-gray-400 ${refreshing ? 'animate-spin' : ''}`} />
-              </button>
             )}
 
             <div className="relative w-full sm:w-auto sm:flex-grow">
