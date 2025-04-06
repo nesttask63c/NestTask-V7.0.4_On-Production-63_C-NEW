@@ -22,6 +22,9 @@ import { saveToIndexedDB, getAllFromIndexedDB, STORES, getByIdFromIndexedDB, cle
 // Define timestamp for cached data
 const CACHE_TIMESTAMP_KEY = 'routines_last_fetched';
 
+// Add a way to track which routines have been fully loaded with slots
+const LOADED_ROUTINES_KEY = 'fully_loaded_routines';
+
 // Add this new function to help diagnose routine service issues
 const runServiceDiagnostics = async () => {
   console.log('Running routine service diagnostics...');
@@ -92,7 +95,84 @@ export function useRoutines() {
   const [diagnosticState, setDiagnosticState] = useState<any>(null);
   const isOffline = useOfflineStatus();
 
-  // Improved load routines function with cache validation and retry
+  // Enhanced prefetch function to make initial load faster
+  const prefetchRoutineData = useCallback(async () => {
+    if (isOffline) return; // Don't prefetch when offline
+    
+    try {
+      console.log('Aggressively prefetching routine data for faster access');
+      
+      // Get the active routine first for fastest critical path
+      const { data: activeRoutines } = await supabase
+        .from('routines')
+        .select('id')
+        .eq('is_active', true)
+        .limit(1);
+      
+      if (activeRoutines && activeRoutines.length > 0) {
+        const activeRoutineId = activeRoutines[0].id;
+        
+        // Prefetch active routine's slots for immediate display
+        console.log('Prefetching slots for active routine', activeRoutineId);
+        const { data: slots } = await supabase
+          .from('routine_slots')
+          .select('*')
+          .eq('routine_id', activeRoutineId);
+        
+        // Get IDs for related data
+        if (slots && slots.length > 0) {
+          const courseIds = [...new Set(slots.map(s => s.course_id).filter(Boolean))];
+          const teacherIds = [...new Set(slots.map(s => s.teacher_id).filter(Boolean))];
+          
+          // Prefetch all related data in parallel
+          await Promise.all([
+            supabase.from('courses').select('id,name,code').in('id', courseIds),
+            supabase.from('teachers').select('id,name').in('id', teacherIds)
+          ]);
+        }
+      }
+      
+      console.log('Critical path prefetch completed successfully');
+    } catch (err) {
+      console.error('Error prefetching routine data:', err);
+      // Silent failure - this is just an optimization
+    }
+  }, [isOffline]);
+
+  // Add a new function to verify if routine data is complete (has slots)
+  const verifyRoutineDataCompleteness = useCallback(async () => {
+    try {
+      const storedRoutines = await getAllFromIndexedDB(STORES.ROUTINES);
+      
+      // Check if we have routines but they're missing slots
+      if (storedRoutines && storedRoutines.length > 0) {
+        // Find the active routine
+        const activeRoutine = storedRoutines.find(r => r.isActive);
+        
+        if (activeRoutine) {
+          // Check if slots are missing or empty
+          const hasSlots = activeRoutine.slots && activeRoutine.slots.length > 0;
+          console.log(`Active routine ${activeRoutine.id} has slots: ${hasSlots}`);
+          
+          if (!hasSlots) {
+            // Slots are missing, explicitly fetch them
+            console.log('Fetching missing slots for active routine');
+            await refreshRoutineSlots(activeRoutine.id);
+            return false; // Indicate data needed to be fixed
+          }
+        }
+        
+        return true; // Data is complete
+      }
+      
+      return false; // No data found
+    } catch (err) {
+      console.error('Error verifying routine data completeness:', err);
+      return false;
+    }
+  }, []);
+
+  // Improved load routines function with parallel processing and faster rendering
   const loadRoutines = useCallback(async (forceRefresh = false, isAdminView = false) => {
     try {
       setLoading(true);
@@ -108,6 +188,7 @@ export function useRoutines() {
       if (forceRefresh) {
         console.log('Force refresh requested, invalidating cache');
         localStorage.removeItem(CACHE_TIMESTAMP_KEY);
+        localStorage.removeItem(LOADED_ROUTINES_KEY);
       }
       
       if (isOffline) {
@@ -129,13 +210,13 @@ export function useRoutines() {
         // Check cache validity and only fetch if necessary
         const lastFetchedTimestamp = localStorage.getItem(CACHE_TIMESTAMP_KEY);
         const currentTime = Date.now();
-        const cacheDurationMs = isAdminView ? 0 : 5 * 60 * 1000; // No cache for admin, 5 minutes for regular users
+        const cacheDurationMs = isAdminView ? 0 : 3 * 60 * 1000; // No cache for admin, 3 minutes for regular users (reduced from 5)
         const isCacheValid = !isAdminView && !forceRefresh && lastFetchedTimestamp && 
                             (currentTime - parseInt(lastFetchedTimestamp)) < cacheDurationMs;
         
         // Skip fetch if cache is valid and not forcing refresh
         if (isCacheValid && !forceRefresh) {
-          console.log('Using cached routines data (valid for 5 minutes)');
+          console.log('Using cached routines data (valid for 3 minutes)');
           const cachedRoutines = await getAllFromIndexedDB(STORES.ROUTINES);
           if (cachedRoutines && cachedRoutines.length > 0) {
             // Check if slots data exists in the cache
@@ -144,6 +225,16 @@ export function useRoutines() {
             
             if (hasSlots) {
               setRoutines(cachedRoutines);
+              // Start background refresh for next visit
+              setTimeout(() => {
+                console.log('Starting background refresh for future visits');
+                fetchRoutines().then(freshData => {
+                  if (freshData && freshData.length > 0) {
+                    saveToIndexedDB(STORES.ROUTINES, freshData);
+                    localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+                  }
+                }).catch(err => console.warn('Background refresh error:', err));
+              }, 500);
               setLoading(false);
               return;
             } else {
@@ -154,108 +245,255 @@ export function useRoutines() {
           }
         }
         
-        // Fetch with retry
-        let fetchSuccess = false;
-        let fetchError: any = null;
-        let fetchedData: Routine[] = [];
-        
-        // Try up to 3 times with increasing delays
-        for (let attempt = 0; attempt < 3 && !fetchSuccess; attempt++) {
-          try {
-            if (attempt > 0) {
-              console.log(`Retry attempt ${attempt} for fetching routines...`);
-              await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Exponential backoff
+        // Progressive loading approach - fetch basic data first, then fill in details
+        try {
+          // 1. First quickly load basic routine data without slots
+          console.log('Starting progressive load - fetching basic routine data');
+          const { data: basicRoutines } = await supabase
+            .from('routines')
+            .select('*')
+            .order('created_at', { ascending: false });
+            
+          if (basicRoutines && basicRoutines.length > 0) {
+            const mappedBasicRoutines: Routine[] = basicRoutines.map((r: any) => ({
+              id: r.id,
+              name: r.name,
+              semester: r.semester,
+              isActive: r.is_active,
+              createdAt: r.created_at,
+              slots: []
+            }));
+            
+            // Before updating state, check if there's cached data with slots
+            // This helps prevent flicker when loading from cache
+            const existingRoutines = await getAllFromIndexedDB(STORES.ROUTINES);
+            const hasExistingRoutines = existingRoutines && existingRoutines.length > 0;
+            const hasSlots = hasExistingRoutines && existingRoutines.some(r => r.slots && r.slots.length > 0);
+            
+            if (hasExistingRoutines && hasSlots && !forceRefresh) {
+              console.log('Using cached data with slots while loading from server');
+              // Use the cached data first to avoid flickering
+              setRoutines(existingRoutines);
+            } else {
+              // Immediately update state with basic data for faster rendering
+              setRoutines(mappedBasicRoutines);
             }
             
-            console.log('Fetching fresh routine data from server');
-            fetchedData = await fetchRoutines();
-            
-            // Verify that slots data is present
-            const hasSlots = fetchedData.some(r => r.slots && r.slots.length > 0);
-            console.log(`Fetched ${fetchedData.length} routines with slots data:`, hasSlots);
-            
-            if (!hasSlots && fetchedData.length > 0) {
-              // If we have routines but no slots, try fetching directly
-              console.log('No slots found, attempting direct slot fetch');
-              for (const routine of fetchedData) {
-                try {
-                  const { data: slots } = await supabase
-                    .from('routine_slots')
-                    .select('*')
-                    .eq('routine_id', routine.id);
-                  
-                  if (slots && slots.length > 0) {
-                    console.log(`Found ${slots.length} slots for routine ${routine.id}`);
-                    routine.slots = slots.map((slot: any) => ({
-                      id: slot.id,
-                      routineId: routine.id,
-                      dayOfWeek: slot.day_of_week,
-                      startTime: slot.start_time,
-                      endTime: slot.end_time,
-                      roomNumber: slot.room_number || '',
-                      section: slot.section || '',
-                      courseId: slot.course_id || '',
-                      teacherId: slot.teacher_id || '',
-                      courseName: '',  // Will be populated on demand
-                      teacherName: '', // Will be populated on demand
-                      createdAt: slot.created_at
-                    }));
-                  }
-                } catch (slotError) {
-                  console.error(`Error fetching slots for routine ${routine.id}:`, slotError);
+            // Get active routine ID for prioritized slot loading
+            const activeRoutine = mappedBasicRoutines.find(r => r.isActive);
+            if (activeRoutine) {
+              // 2. Prioritize loading slots for the active routine
+              console.log('Loading slots for active routine first');
+              const { data: activeSlots } = await supabase
+                .from('routine_slots')
+                .select('*')
+                .eq('routine_id', activeRoutine.id);
+              
+              if (activeSlots && activeSlots.length > 0) {
+                // Format the slots
+                const formattedActiveSlots = activeSlots.map((slot: any) => ({
+                  id: slot.id,
+                  routineId: slot.routine_id,
+                  dayOfWeek: slot.day_of_week,
+                  startTime: slot.start_time,
+                  endTime: slot.end_time,
+                  roomNumber: slot.room_number || '',
+                  section: slot.section || '',
+                  courseId: slot.course_id || '',
+                  teacherId: slot.teacher_id || '',
+                  courseName: '',
+                  courseCode: '',
+                  teacherName: '',
+                  createdAt: slot.created_at
+                }));
+                
+                // Update the active routine with slots
+                const updatedRoutines = [...mappedBasicRoutines];
+                const activeIndex = updatedRoutines.findIndex(r => r.id === activeRoutine.id);
+                if (activeIndex >= 0) {
+                  updatedRoutines[activeIndex] = {
+                    ...updatedRoutines[activeIndex],
+                    slots: formattedActiveSlots
+                  };
+                  setRoutines(updatedRoutines);
                 }
+                
+                // 3. Load related teacher and course data
+                const courseIds = [...new Set(formattedActiveSlots.map(s => s.courseId).filter(Boolean))];
+                const teacherIds = [...new Set(formattedActiveSlots.map(s => s.teacherId).filter(Boolean))];
+                
+                if (courseIds.length > 0 || teacherIds.length > 0) {
+                  const [courseData, teacherData] = await Promise.all([
+                    courseIds.length > 0 ? supabase.from('courses').select('id,name,code').in('id', courseIds) : { data: [] },
+                    teacherIds.length > 0 ? supabase.from('teachers').select('id,name').in('id', teacherIds) : { data: [] }
+                  ]);
+                  
+                  const courses = courseData.data || [];
+                  const teachers = teacherData.data || [];
+                  
+                  // Create maps for faster lookup
+                  const courseMap = new Map();
+                  const teacherMap = new Map();
+                  courses.forEach((c: any) => courseMap.set(c.id, { name: c.name, code: c.code }));
+                  teachers.forEach((t: any) => teacherMap.set(t.id, t.name));
+                  
+                  // Enrich slots with course and teacher data
+                  const enrichedSlots = formattedActiveSlots.map(slot => {
+                    const courseInfo = courseMap.get(slot.courseId) || {};
+                    return {
+                      ...slot,
+                      courseName: courseInfo.name || '',
+                      courseCode: courseInfo.code || '',
+                      teacherName: teacherMap.get(slot.teacherId) || ''
+                    };
+                  });
+                  
+                  // Update the active routine with enriched slots
+                  const finalUpdatedRoutines = [...updatedRoutines];
+                  const finalActiveIndex = finalUpdatedRoutines.findIndex(r => r.id === activeRoutine.id);
+                  if (finalActiveIndex >= 0) {
+                    finalUpdatedRoutines[finalActiveIndex] = {
+                      ...finalUpdatedRoutines[finalActiveIndex],
+                      slots: enrichedSlots
+                    };
+                    setRoutines(finalUpdatedRoutines);
+                  }
+                }
+              } else {
+                // No slots found from API - try to recover from cache
+                const existingRoutines = await getAllFromIndexedDB(STORES.ROUTINES);
+                const existingActive = existingRoutines?.find(r => r.id === activeRoutine.id);
+                
+                if (existingActive?.slots && existingActive.slots.length > 0) {
+                  console.log('Using cached slots for active routine as API returned none');
+                  const recoveredRoutines = [...mappedBasicRoutines];
+                  const activeIndex = recoveredRoutines.findIndex(r => r.id === activeRoutine.id);
+                  if (activeIndex >= 0) {
+                    recoveredRoutines[activeIndex] = {
+                      ...recoveredRoutines[activeIndex], 
+                      slots: existingActive.slots
+                    };
+                    setRoutines(recoveredRoutines);
+                  }
+                }
+              }
+              
+              // Store that we've fully loaded this routine
+              const loadedRoutines = JSON.parse(localStorage.getItem(LOADED_ROUTINES_KEY) || '[]');
+              if (!loadedRoutines.includes(activeRoutine.id)) {
+                loadedRoutines.push(activeRoutine.id);
+                localStorage.setItem(LOADED_ROUTINES_KEY, JSON.stringify(loadedRoutines));
               }
             }
             
-            fetchSuccess = true;
-          } catch (err) {
-            fetchError = err;
-            console.warn(`Fetch attempt ${attempt + 1} failed:`, err);
+            // 4. In the background, load slots for other routines
+            Promise.all(
+              mappedBasicRoutines
+                .filter(r => !r.isActive)
+                .map(async routine => {
+                  try {
+                    const { data: slots } = await supabase
+                      .from('routine_slots')
+                      .select('*')
+                      .eq('routine_id', routine.id);
+                      
+                    if (slots && slots.length > 0) {
+                      return {
+                        routineId: routine.id,
+                        slots: slots.map((slot: any) => ({
+                          id: slot.id,
+                          routineId: slot.routine_id,
+                          dayOfWeek: slot.day_of_week,
+                          startTime: slot.start_time,
+                          endTime: slot.end_time,
+                          roomNumber: slot.room_number || '',
+                          section: slot.section || '',
+                          courseId: slot.course_id || '',
+                          teacherId: slot.teacher_id || '',
+                          courseName: '',
+                          courseCode: '',
+                          teacherName: '',
+                          createdAt: slot.created_at
+                        }))
+                      };
+                    }
+                    
+                    // No slots from API - try to recover from cache
+                    const existingRoutines = await getAllFromIndexedDB(STORES.ROUTINES);
+                    const existingRoutine = existingRoutines?.find(r => r.id === routine.id);
+                    
+                    if (existingRoutine?.slots && existingRoutine.slots.length > 0) {
+                      console.log(`Using cached slots for routine ${routine.id} as API returned none`);
+                      return {
+                        routineId: routine.id,
+                        slots: existingRoutine.slots
+                      };
+                    }
+                    
+                    return { routineId: routine.id, slots: [] };
+                  } catch (err) {
+                    console.error(`Error loading slots for routine ${routine.id}:`, err);
+                    return { routineId: routine.id, slots: [] };
+                  }
+                })
+            ).then(results => {
+              // Update each routine with its slots
+              const fullRoutines = [...mappedBasicRoutines];
+              
+              results.forEach(result => {
+                const routineIndex = fullRoutines.findIndex(r => r.id === result.routineId);
+                if (routineIndex >= 0 && result.slots.length > 0) {
+                  fullRoutines[routineIndex] = {
+                    ...fullRoutines[routineIndex],
+                    slots: result.slots
+                  };
+                }
+              });
+              
+              // Final step: check and fix any missing slot data
+              fixMissingSlotData(fullRoutines).then(fixedRoutines => {
+                // Final update with all slot data
+                setRoutines(fixedRoutines);
+                
+                // Cache the full data
+                saveToIndexedDB(STORES.ROUTINES, fixedRoutines);
+                localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+                
+                console.log('All routine data loaded, fixed, and cached');
+              });
+            }).catch(err => {
+              console.error('Error loading all routine slots:', err);
+            });
+          } else {
+            setRoutines([]);
           }
-        }
-        
-        if (fetchSuccess) {
-          // Update local state
-          setRoutines(fetchedData);
+        } catch (fetchErr: any) {
+          console.error('Error fetching routines:', fetchErr);
           
-          // Always update the cache timestamp when successfully fetching data
-          // This ensures the timestamp reflects the most recent successful fetch
-          localStorage.setItem(CACHE_TIMESTAMP_KEY, currentTime.toString());
-          
-          // Clear existing cache and save the new data to IndexedDB
-          try {
-            await clearIndexedDBStore(STORES.ROUTINES);
-            await saveToIndexedDB(STORES.ROUTINES, fetchedData);
-            console.log('Successfully updated routine cache in IndexedDB');
-          } catch (cacheError) {
-            console.error('Error updating routine cache:', cacheError);
-          }
-          
-          // Ensure slots data is loaded for the active routine
-          const activeRoutine = fetchedData.find(r => r.isActive);
-          if (activeRoutine && (!activeRoutine.slots || activeRoutine.slots.length === 0)) {
-            console.log('Forcing slots load for active routine');
-            await refreshRoutineSlots(activeRoutine.id);
-          }
-        } else {
-          // All retry attempts failed
-          console.error('All fetch attempts for routines failed:', fetchError);
-          setError(fetchError?.message || 'Failed to load routines after multiple attempts');
-          
-          // Try to load from cache as fallback
+          // Try to recover from cache and fix missing data
           try {
             const offlineRoutines = await getAllFromIndexedDB(STORES.ROUTINES);
             if (offlineRoutines && offlineRoutines.length > 0) {
               console.log('Using cached routines due to fetch error');
-              setRoutines(offlineRoutines);
+              
+              // Try to fix any missing slot data in the cached routines
+              const fixedRoutines = await fixMissingSlotData(offlineRoutines);
+              setRoutines(fixedRoutines);
+              
+              // Update the cache with fixed data
+              await saveToIndexedDB(STORES.ROUTINES, fixedRoutines);
+            } else {
+              setRoutines([]);
             }
           } catch (offlineErr) {
             console.error('Error loading fallback routines:', offlineErr);
+            setRoutines([]);
           }
           
-          // Run diagnostics if all attempts failed
+          // Run diagnostics if fetch failed
           const diagnostics = await runServiceDiagnostics();
           setDiagnosticState(diagnostics);
+          setError(fetchErr.message || 'Failed to load routines');
         }
       }
     } catch (err: any) {
@@ -278,6 +516,117 @@ export function useRoutines() {
       setLoading(false);
     }
   }, [isOffline]);
+
+  // Add prefetch call to the main effect
+  useEffect(() => {
+    // Start prefetching immediately for critical path
+    prefetchRoutineData();
+    
+    // Then verify data completeness and load full data set
+    verifyRoutineDataCompleteness().then(isComplete => {
+      if (!isComplete) {
+        console.log('Routine data is incomplete, forcing full data load');
+        loadRoutines(true);  // Force refresh of incomplete data
+      } else {
+        console.log('Routine data is complete, using cached data');
+        loadRoutines();  // Use cached data when available
+      }
+    });
+
+    // Only subscribe to changes when online
+    if (!isOffline) {
+      const subscription = supabase
+        .channel('routines')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'routines'
+          },
+          () => {
+            loadRoutines(true); // Force refresh on database changes
+          }
+        )
+        .subscribe();
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
+  }, [isOffline, loadRoutines, prefetchRoutineData, verifyRoutineDataCompleteness]);
+
+  // Function to fix missing slot data issues that can occur after refreshes
+  const fixMissingSlotData = async (routines: Routine[]): Promise<Routine[]> => {
+    if (!routines || routines.length === 0 || isOffline) return routines;
+    
+    try {
+      // Find routines with missing slots
+      const incompleteRoutines = routines.filter(r => !r.slots || r.slots.length === 0);
+      
+      if (incompleteRoutines.length === 0) {
+        console.log('All routines have slot data, no fixes needed');
+        return routines;
+      }
+      
+      console.log(`Found ${incompleteRoutines.length} routines with missing slots, fixing...`);
+      
+      // Prioritize the active routine
+      const activeRoutine = routines.find(r => r.isActive);
+      const routinesToFix = [
+        ...(activeRoutine ? [activeRoutine] : []),
+        ...incompleteRoutines.filter(r => !r.isActive)
+      ];
+      
+      // Deduplicate the array
+      const uniqueRoutinesToFix = Array.from(new Map(routinesToFix.map(r => [r.id, r])).values());
+      
+      // Fetch slots for each routine with missing data
+      const updatedRoutines = [...routines];
+      
+      for (const routine of uniqueRoutinesToFix) {
+        console.log(`Fixing missing slots for routine ${routine.id}`);
+        const { data: slots } = await supabase
+          .from('routine_slots')
+          .select('*')
+          .eq('routine_id', routine.id);
+          
+        if (slots && slots.length > 0) {
+          const formattedSlots = slots.map((slot: any) => ({
+            id: slot.id,
+            routineId: slot.routine_id,
+            dayOfWeek: slot.day_of_week,
+            startTime: slot.start_time,
+            endTime: slot.end_time,
+            roomNumber: slot.room_number || '',
+            section: slot.section || '',
+            courseId: slot.course_id || '',
+            teacherId: slot.teacher_id || '',
+            courseName: '',
+            courseCode: '',
+            teacherName: '',
+            createdAt: slot.created_at
+          }));
+          
+          // Update the routine with the fetched slots
+          const routineIndex = updatedRoutines.findIndex(r => r.id === routine.id);
+          if (routineIndex >= 0) {
+            updatedRoutines[routineIndex] = {
+              ...updatedRoutines[routineIndex],
+              slots: formattedSlots
+            };
+          }
+        }
+      }
+      
+      // Return the fixed routines
+      return updatedRoutines;
+      
+    } catch (err) {
+      console.error('Error fixing missing slot data:', err);
+      return routines; // Return original data on error
+    }
+  };
 
   // Add a new function to refresh slots for a specific routine
   const refreshRoutineSlots = async (routineId: string) => {
@@ -377,54 +726,6 @@ export function useRoutines() {
       console.error(`Error refreshing slots for routine ${routineId}:`, err);
     }
   };
-
-  // New function to prefetch related data for faster loading
-  const prefetchRoutineData = useCallback(async () => {
-    if (isOffline) return; // Don't prefetch when offline
-    
-    try {
-      console.log('Prefetching routine-related data for faster access');
-      
-      // Prefetch courses and teachers in parallel
-      await Promise.all([
-        supabase.from('courses').select('id,name,code'),
-        supabase.from('teachers').select('id,name')
-      ]);
-      
-      console.log('Prefetch completed successfully');
-    } catch (err) {
-      console.error('Error prefetching routine data:', err);
-      // Silent failure - this is just an optimization
-    }
-  }, [isOffline]);
-
-  // Add prefetch call to the main effect
-  useEffect(() => {
-    loadRoutines();
-    prefetchRoutineData(); // Prefetch related data while loading routines
-
-    // Only subscribe to changes when online
-    if (!isOffline) {
-      const subscription = supabase
-        .channel('routines')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'routines'
-          },
-          () => {
-            loadRoutines(true); // Force refresh on database changes
-          }
-        )
-        .subscribe();
-
-      return () => {
-        subscription.unsubscribe();
-      };
-    }
-  }, [isOffline, loadRoutines, prefetchRoutineData]);
 
   // Enhanced offline sync with improved progress tracking and error handling
   const syncOfflineChanges = async () => {

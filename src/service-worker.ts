@@ -298,6 +298,71 @@ registerRoute(
   })
 );
 
+// Add a dedicated persistent cache specifically for routine data
+// This ensures routine data is preserved between refreshes
+registerRoute(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ({ url }: { url: any }) => {
+    // Skip unsupported URL schemes
+    if (url.protocol === 'chrome-extension:' || 
+        url.protocol === 'chrome:' ||
+        url.protocol === 'edge:' ||
+        url.protocol === 'brave:') {
+      return false;
+    }
+    
+    // Match exactly routine data endpoints
+    return url.pathname.includes('/rest/v1/routines') && 
+           url.searchParams.get('apikey') !== null &&
+           (url.pathname.includes('is_active=true') || 
+            url.pathname.includes('select=*'));
+  },
+  new NetworkFirst({
+    cacheName: 'routine-data-persistent-v1',
+    plugins: [
+      new CacheableResponsePlugin({
+        statuses: [0, 200],
+      }),
+      new ExpirationPlugin({
+        maxEntries: 100,
+        maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days 
+        purgeOnQuotaError: false // Don't purge this important data automatically
+      }),
+    ],
+  })
+);
+
+// Add a specialized cache for routine slots
+registerRoute(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ({ url }: { url: any }) => {
+    // Skip unsupported URL schemes
+    if (url.protocol === 'chrome-extension:' || 
+        url.protocol === 'chrome:' ||
+        url.protocol === 'edge:' ||
+        url.protocol === 'brave:') {
+      return false;
+    }
+    
+    // Specifically match routine slots endpoints
+    return url.pathname.includes('/rest/v1/routine_slots') && 
+           url.searchParams.get('apikey') !== null;
+  },
+  new NetworkFirst({
+    cacheName: 'routine-slots-persistent-v1',
+    plugins: [
+      new CacheableResponsePlugin({
+        statuses: [0, 200],
+      }),
+      new ExpirationPlugin({
+        maxEntries: 300,
+        maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days
+        purgeOnQuotaError: false // Don't purge important slot data
+      }),
+    ],
+  })
+);
+
 // Handle offline fallback
 const OFFLINE_PAGE = '/offline.html';
 

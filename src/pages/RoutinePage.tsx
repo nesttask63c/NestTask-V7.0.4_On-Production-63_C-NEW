@@ -56,9 +56,21 @@ export function RoutinePage() {
     setRefreshing(true);
     try {
       console.log('Loading fresh routine data on page load/refresh');
+      // Call loadRoutines but don't rely on its return value since it returns void
       await loadRoutines(true);
+      
+      // Instead, check if we have data after loading
+      const hasData = routines.length > 0 && routines.some(r => r.slots && r.slots.length > 0);
+      
+      // If we don't have data but have existing enriched slots, keep using them
+      if (!hasData && enrichedSlots.length > 0) {
+        console.log('Load did not provide routine data but using existing enriched slots');
+      }
+      
+      return hasData || enrichedSlots.length > 0;
     } catch (err) {
       console.error('Error refreshing routine data:', err);
+      return false;
     } finally {
       setRefreshing(false);
     }
@@ -174,16 +186,145 @@ export function RoutinePage() {
     });
   }, [filteredSlots]);
 
+  // Skeleton UI component for better perceived performance
+  const RoutineSkeleton = () => (
+    <div className="space-y-3 animate-pulse">
+      {/* Day selector skeleton */}
+      <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3 sm:p-4 shadow-sm mb-4">
+        <div className="flex justify-between">
+          <div>
+            <div className="h-6 w-40 bg-gray-200 dark:bg-gray-700 rounded mb-2"></div>
+            <div className="h-4 w-32 bg-gray-200 dark:bg-gray-700 rounded"></div>
+          </div>
+          <div className="flex space-x-2">
+            <div className="h-10 w-32 bg-gray-200 dark:bg-gray-700 rounded"></div>
+            <div className="h-10 w-64 bg-gray-200 dark:bg-gray-700 rounded"></div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Day picker skeleton */}
+      <div className="mb-6">
+        <div className="h-5 w-40 bg-gray-200 dark:bg-gray-700 rounded mb-3 mx-auto"></div>
+        <div className="grid grid-cols-6 gap-2">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="h-20 bg-gray-200 dark:bg-gray-700 rounded-xl"></div>
+          ))}
+        </div>
+      </div>
+      
+      {/* Class slots skeleton */}
+      {[...Array(3)].map((_, i) => (
+        <div key={i} className="bg-white dark:bg-gray-800 rounded-lg sm:rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-gray-700/50 h-32">
+          <div className="flex flex-row h-full">
+            <div className="w-[85px] sm:w-[120px] md:w-[180px] bg-gray-50 dark:bg-gray-800/40 flex flex-col justify-between items-center py-4 px-2 border-r border-gray-100 dark:border-gray-700/50">
+              <div className="h-6 w-16 bg-gray-200 dark:bg-gray-700 rounded"></div>
+              <div className="h-6 w-16 bg-gray-200 dark:bg-gray-700 rounded"></div>
+            </div>
+            <div className="flex-1 p-4">
+              <div className="h-6 w-3/4 bg-gray-200 dark:bg-gray-700 rounded mb-4"></div>
+              <div className="space-y-3">
+                <div className="flex justify-between">
+                  <div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded"></div>
+                  <div className="h-4 w-24 bg-gray-200 dark:bg-gray-700 rounded"></div>
+                </div>
+                <div className="flex justify-between">
+                  <div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded"></div>
+                  <div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded"></div>
+                </div>
+                <div className="flex justify-between">
+                  <div className="h-4 w-16 bg-gray-200 dark:bg-gray-700 rounded"></div>
+                  <div className="h-4 w-12 bg-gray-200 dark:bg-gray-700 rounded"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
+  // Preserve the current slots when component remounts
+  useEffect(() => {
+    // Data persistence for page refreshes
+    const handleBeforeUnload = () => {
+      if (currentRoutine?.id && enrichedSlots.length > 0) {
+        try {
+          // Save the current view state to sessionStorage
+          sessionStorage.setItem('last_routine_view', JSON.stringify({
+            routineId: currentRoutine.id,
+            slots: enrichedSlots,
+            selectedDate: selectedDate.toISOString(),
+            searchTerm
+          }));
+          console.log('Preserved routine view state before unload');
+        } catch (err) {
+          console.error('Failed to save routine state:', err);
+        }
+      }
+    };
+
+    // Attach the handler
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    // Try to restore from session storage on remount
+    try {
+      const savedState = sessionStorage.getItem('last_routine_view');
+      if (savedState) {
+        const parsedState = JSON.parse(savedState);
+        
+        if (parsedState.slots && parsedState.slots.length > 0) {
+          console.log('Restoring routine view state from session');
+          setEnrichedSlots(parsedState.slots);
+        }
+        
+        if (parsedState.selectedDate) {
+          setSelectedDate(new Date(parsedState.selectedDate));
+        }
+        
+        if (parsedState.searchTerm) {
+          setSearchTerm(parsedState.searchTerm);
+        }
+        
+        if (parsedState.routineId && !selectedRoutineId) {
+          setSelectedRoutineId(parsedState.routineId);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to restore routine state:', err);
+    }
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [currentRoutine, enrichedSlots, selectedDate, searchTerm, selectedRoutineId]);
+
   if (loading || refreshing) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4">
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500 mb-4"></div>
-        <p className="text-gray-600 dark:text-gray-300 text-center">
-          {refreshing ? 'Refreshing routine data...' : 'Loading routine data...'}
-        </p>
-        <p className="text-sm text-gray-500 dark:text-gray-400 text-center mt-2">
-          {refreshing ? 'Getting the latest schedule from the server' : 'Please wait while we load your class schedule'}
-        </p>
+      <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
+        <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg mb-4 sm:mb-6 p-3 sm:p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center">
+                <Calendar className="w-6 h-6 lg:w-7 lg:h-7 text-blue-400 opacity-70 mr-2" />
+                <div className="h-8 w-40 bg-gray-200 dark:bg-gray-700 rounded"></div>
+              </div>
+              <div className="h-4 w-32 bg-gray-200 dark:bg-gray-700 rounded mt-2"></div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-10 w-10 rounded-full bg-gray-200 dark:bg-gray-700 animate-spin"></div>
+            </div>
+          </div>
+        </div>
+        
+        <RoutineSkeleton />
+        
+        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-white dark:bg-gray-800 px-4 py-2 rounded-full shadow-lg text-sm text-gray-600 dark:text-gray-300">
+          <div className="flex items-center">
+            <div className="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full mr-2"></div>
+            {refreshing ? 'Refreshing routine data...' : 'Loading your class schedule...'}
+          </div>
+        </div>
       </div>
     );
   }

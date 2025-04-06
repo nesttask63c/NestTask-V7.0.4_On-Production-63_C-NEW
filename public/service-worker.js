@@ -30,6 +30,16 @@ const RUNTIME_CACHE_PATTERNS = [
   /^https:\/\/fonts\.gstatic\.com/ // Google fonts files
 ];
 
+// Specific Supabase API endpoints to cache for offline use
+const SUPABASE_CACHE_PATTERNS = [
+  // Routine specific endpoints for offline access
+  /rest\/v1\/routines\?select=.*&is_active=true/,
+  /rest\/v1\/routine_slots\?select=.*&routine_id=/,
+  // Course/teacher data related to routines
+  /rest\/v1\/courses\?select=id,name,code/,
+  /rest\/v1\/teachers\?select=id,name/
+];
+
 // Create sync queues for different operations
 let taskQueue, routineQueue, courseTeacherQueue;
 
@@ -239,7 +249,51 @@ self.addEventListener('fetch', (event) => {
       return;
     }
 
-    // Skip Supabase API requests (let them go to network)
+    // Special handling for Supabase API routine data
+    // This ensures critical routine data is properly cached
+    if (url.hostname.includes('supabase.co') && 
+        SUPABASE_CACHE_PATTERNS.some(pattern => pattern.test(url.toString()))) {
+      
+      console.log('Handling routine data request with stale-while-revalidate:', url.toString());
+      
+      event.respondWith(
+        caches.open('routine-data-cache-v1').then(async (cache) => {
+          try {
+            // Try to get from cache first
+            const cachedResponse = await cache.match(event.request);
+            
+            // Clone the request before using it for fetch (because it's a stream that can only be read once)
+            const fetchPromise = fetch(event.request.clone())
+              .then(response => {
+                // Only cache successful responses
+                if (response.status === 200) {
+                  // Clone before caching as the response body can only be consumed once
+                  cache.put(event.request, response.clone());
+                }
+                return response;
+              })
+              .catch(error => {
+                console.error('Error fetching routine data:', error);
+                // If network fetch fails and we have a cached response, use it
+                if (cachedResponse) {
+                  return cachedResponse;
+                }
+                throw error;
+              });
+            
+            // Return cached response if available, otherwise wait for fetch
+            return cachedResponse || fetchPromise;
+          } catch (error) {
+            console.error('Error in routine data cache handling:', error);
+            // Try direct fetch as last resort
+            return fetch(event.request);
+          }
+        })
+      );
+      return;
+    }
+
+    // Skip other Supabase API requests (let them go to network)
     if (url.hostname.includes('supabase.co')) {
       return;
     }
