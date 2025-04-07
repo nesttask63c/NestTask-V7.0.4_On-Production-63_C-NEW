@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useCourses } from '../hooks/useCourses';
 import { StudyMaterialsGrid } from '../components/study-materials/StudyMaterialsGrid';
-import { LoadingScreen } from '../components/LoadingScreen';
+import { SkeletonUI } from '../components/ui/SkeletonUI';
 import { Book, Search, Filter, FileText } from 'lucide-react';
 import type { Course, StudyMaterialCategory } from '../types/course';
 
@@ -60,7 +60,7 @@ export function StudyMaterialsPage() {
   }, []);
 
   if (loading) {
-    return <LoadingScreen />;
+    return <SkeletonUI />;
   }
 
   const categories: (StudyMaterialCategory | 'all')[] = [
