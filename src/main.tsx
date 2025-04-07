@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Analytics } from '@vercel/analytics/react';
 // Import CSS (Vite handles this correctly)
 import './index.css';
-import { LoadingScreen } from '@/components/LoadingScreen';
+import { SkeletonUI } from '@/components/ui/SkeletonUI';
 import { initPWA } from '@/utils/pwa';
 import { prefetchResources, prefetchAsset, prefetchApiData } from '@/utils/prefetch';
 // Use normal import without extension, the path alias will handle it correctly
@@ -199,62 +199,31 @@ const root = createRoot(rootElement);
 // Track initial render time
 performance.mark('react-mount-start');
 
-// Render the app with minimal suspense delay and initialize loading state in DOM
+// Render the app with skeleton UI for initial load
 root.render(
   <StrictMode>
-    <Suspense fallback={<LoadingScreen minimumLoadTime={1200} showProgress={true} />}>
+    <Suspense fallback={<SkeletonUI />}>
       <App />
       <Analytics />
     </Suspense>
   </StrictMode>
 );
 
-// Add reliable cleanup for loading screen
+// Measure and log app load time after initial render
 window.addEventListener('load', () => {
-  // Measure the actual load time
   const loadTime = performance.now() - startTime;
   console.debug(`App loaded in ${loadTime.toFixed(2)}ms`);
   
-  // Delay loading screen removal to ensure the app is fully rendered
-  // React Suspense might still be showing fallback even after window load
+  // Preload other routes after initial render to improve navigation speed
   setTimeout(() => {
-    const loadingScreen = document.querySelector('.loading') as HTMLElement;
-    if (loadingScreen) {
-      // Inspect the root element to see if React has mounted
-      const rootElement = document.getElementById('root');
-      if (rootElement && rootElement.childNodes.length === 0) {
-        // React hasn't mounted yet, don't remove the loading screen
-        console.debug('React not mounted yet, keeping loading screen');
-        return;
-      }
-      
-      // Add a fade-out effect before removing
-      loadingScreen.style.transition = 'opacity 0.3s ease-out';
-      loadingScreen.style.opacity = '0';
-      
-      // Remove from DOM after transition completes
-      setTimeout(() => {
-        loadingScreen.remove();
-      }, 300);
-    }
-  }, 300); // Wait to ensure React has fully hydrated the DOM
-});
-
-// Preload other routes after initial render to improve navigation speed
-setTimeout(() => {
-  // Preload common routes in the background after main interface is visible
-  const routesToPreload = [
-    import('./pages/UpcomingPage'),
-    import('./pages/SearchPage')
-  ];
-  
-  Promise.all(routesToPreload)
-    .then(() => console.debug('Background routes preloaded'))
-    .catch(err => console.warn('Error preloading routes:', err));
-}, 2000);
-
-// Measure and log render completion time
-performance.measure('react-mount', 'react-mount-start');
-performance.getEntriesByName('react-mount').forEach(entry => {
-  console.debug(`Initial render completed in ${entry.duration.toFixed(2)}ms`);
+    // Preload common routes in the background after main interface is visible
+    const routesToPreload = [
+      import('./pages/UpcomingPage'),
+      import('./pages/SearchPage')
+    ];
+    
+    Promise.all(routesToPreload).catch(e => 
+      console.debug('Background route preloading error (non-critical):', e)
+    );
+  }, 2000);
 });

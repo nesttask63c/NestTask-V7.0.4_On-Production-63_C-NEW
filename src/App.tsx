@@ -5,7 +5,6 @@ import { useUsers } from './hooks/useUsers';
 import { useNotifications } from './hooks/useNotifications';
 import { useRoutines } from './hooks/useRoutines';
 import { AuthPage } from './pages/AuthPage';
-import { LoadingScreen } from './components/LoadingScreen';
 import { Navigation } from './components/Navigation';
 import { TaskList } from './components/TaskList';
 import { BottomNavigation } from './components/BottomNavigation';
@@ -29,6 +28,7 @@ import type { User } from './types/user';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { supabase } from './lib/supabase';
 import { preloadPredictedRoutes } from './utils/routePreloader';
+import { SkeletonUI } from './components/ui/SkeletonUI';
 
 // Page import functions for prefetching
 const importAdminDashboard = () => import('./pages/AdminDashboard').then(module => ({ default: module.AdminDashboard }));
@@ -314,19 +314,19 @@ export default function App() {
     switch (activePage) {
       case 'upcoming':
         return (
-          <Suspense fallback={<LoadingScreen minimumLoadTime={300} />}>
+          <Suspense fallback={<SkeletonUI />}>
             <UpcomingPage tasks={tasks} />
           </Suspense>
         );
       case 'search':
         return (
-          <Suspense fallback={<LoadingScreen minimumLoadTime={300} />}>
+          <Suspense fallback={<SkeletonUI />}>
             <SearchPage tasks={tasks} />
           </Suspense>
         );
       case 'notifications':
         return (
-          <Suspense fallback={<LoadingScreen minimumLoadTime={300} />}>
+          <Suspense fallback={<SkeletonUI />}>
             <NotificationsPage
               notifications={notifications}
               onMarkAsRead={markAsRead}
@@ -337,19 +337,19 @@ export default function App() {
         );
       case 'courses':
         return (
-          <Suspense fallback={<LoadingScreen minimumLoadTime={300} />}>
+          <Suspense fallback={<SkeletonUI />}>
             <CoursePage />
           </Suspense>
         );
       case 'study-materials':
         return (
-          <Suspense fallback={<LoadingScreen minimumLoadTime={300} />}>
+          <Suspense fallback={<SkeletonUI />}>
             <StudyMaterialsPage />
           </Suspense>
         );
       case 'routine':
         return (
-          <Suspense fallback={<LoadingScreen minimumLoadTime={300} />}>
+          <Suspense fallback={<SkeletonUI />}>
             <RoutinePage />
           </Suspense>
         );
@@ -472,9 +472,9 @@ export default function App() {
     }
   };
 
-  // Early returns based on loading state and authentication
+  // Update this section to use SkeletonUI for all loading states
   if (isLoading || authLoading || (user?.role === 'admin' && usersLoading)) {
-    return <LoadingScreen minimumLoadTime={1000} showProgress={true} />;
+    return <SkeletonUI />;
   }
 
   // Handle password reset flow
@@ -495,7 +495,7 @@ export default function App() {
 
   if (user.role === 'admin') {
     return (
-      <Suspense fallback={<LoadingScreen minimumLoadTime={300} />}>
+      <Suspense fallback={<SkeletonUI />}>
         <AdminDashboard
           users={users}
           tasks={tasks}
@@ -538,7 +538,7 @@ export default function App() {
       
       <main className="max-w-7xl mx-auto px-4 py-20 pb-24">
         {tasksLoading ? (
-          <LoadingScreen minimumLoadTime={500} showProgress={false} />
+          <SkeletonUI />
         ) : (
           renderContent()
         )}
