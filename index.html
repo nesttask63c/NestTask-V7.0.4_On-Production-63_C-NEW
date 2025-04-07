@@ -67,68 +67,6 @@
         height: 100%;
       }
       
-      /* Modern loading screen styles */
-      .loading {
-        position: fixed;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background-color: var(--bg-color);
-        z-index: 9999;
-        opacity: 1;
-        transition: opacity 0.2s ease-out;
-      }
-      
-      .loading-content {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-      }
-      
-      .loading-title {
-        font-size: 1.1rem;
-        font-weight: 500;
-        letter-spacing: 0.02em;
-        margin-top: 1rem;
-        color: var(--text-color);
-        opacity: 0.9;
-      }
-      
-      /* Modern pulse loader */
-      .loader {
-        position: relative;
-        width: 30px;
-        height: 30px;
-      }
-      
-      .loader::before {
-        content: "";
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        background-color: var(--primary-color);
-        opacity: 0.15;
-        transform: scale(1);
-        animation: pulse 1.5s ease-out infinite;
-      }
-      
-      .loader::after {
-        content: "";
-        position: absolute;
-        inset: 8px;
-        border-radius: 50%;
-        background-color: var(--primary-color);
-        transform: scale(1);
-        opacity: 1;
-      }
-      
-      @keyframes pulse {
-        0% { transform: scale(0.8); opacity: 0.3; }
-        50% { transform: scale(1.15); opacity: 0.1; }
-        100% { transform: scale(0.8); opacity: 0.3; }
-      }
-      
       /* Dark mode support */
       .dark {
         --bg-color: #0f172a;
@@ -184,12 +122,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <div class="loading">
-      <div class="loading-content">
-        <div class="loader"></div>
-        <div class="loading-title">NestTask</div>
-      </div>
-    </div>
     
     <!-- Use direct path with type="module" for proper handling by Vite -->
     <script type="module" src="/src/main.tsx"></script>
@@ -216,60 +148,6 @@
             });
         });
       }
-      
-      // Improved loading screen removal with MutationObserver
-      document.addEventListener('DOMContentLoaded', () => {
-        // Get the root element where React will mount
-        const rootEl = document.getElementById('root');
-        
-        // Keep track of whether the app is mounted
-        let appMounted = false;
-        
-        // Observe the root element for changes to detect when React has mounted
-        if (rootEl) {
-          const observer = new MutationObserver((mutations, observer) => {
-            // Check if the app is mounted and has real content
-            if (rootEl.childNodes.length > 0 && rootEl.innerHTML.trim().length > 50) {
-              appMounted = true;
-              
-              // Delay the removal of loading screen slightly to ensure smooth transition
-              setTimeout(() => {
-                const loadingEl = document.querySelector('.loading');
-                if (loadingEl) {
-                  loadingEl.style.opacity = '0';
-                  setTimeout(() => {
-                    loadingEl.remove();
-                    observer.disconnect();
-                  }, 250);
-                }
-              }, 100); // Small delay to ensure React has rendered completely
-            }
-          });
-          
-          // Configure the observer to check for childList and subtree changes
-          observer.observe(rootEl, { 
-            childList: true, 
-            subtree: true,
-            characterData: true,
-            attributes: true 
-          });
-        }
-        
-        // Enhanced failsafe: Make sure loading screen is removed if observer fails
-        setTimeout(() => {
-          // Only remove loading if app hasn't mounted yet
-          if (!appMounted) {
-            console.debug('Using failsafe to remove loading screen');
-            const loadingEl = document.querySelector('.loading');
-            if (loadingEl) {
-              loadingEl.style.opacity = '0';
-              setTimeout(() => {
-                loadingEl.remove();
-              }, 250);
-            }
-          }
-        }, 3000); // Longer timeout to give app more time to initialize
-      });
     </script>
   </body>
 </html>

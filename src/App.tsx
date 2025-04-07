@@ -29,6 +29,7 @@ import type { User } from './types/user';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { supabase } from './lib/supabase';
 import { preloadPredictedRoutes } from './utils/routePreloader';
+import { SkeletonUI } from './components/ui/SkeletonUI';
 
 // Page import functions for prefetching
 const importAdminDashboard = () => import('./pages/AdminDashboard').then(module => ({ default: module.AdminDashboard }));
@@ -472,7 +473,7 @@ export default function App() {
     }
   };
 
-  // Early returns based on loading state and authentication
+  // Update this section to use SkeletonUI for tasks loading on home page
   if (isLoading || authLoading || (user?.role === 'admin' && usersLoading)) {
     return <LoadingScreen minimumLoadTime={1000} showProgress={true} />;
   }
@@ -537,7 +538,9 @@ export default function App() {
       )}
       
       <main className="max-w-7xl mx-auto px-4 py-20 pb-24">
-        {tasksLoading ? (
+        {tasksLoading && activePage === 'home' ? (
+          <SkeletonUI />
+        ) : tasksLoading ? (
           <LoadingScreen minimumLoadTime={500} showProgress={false} />
         ) : (
           renderContent()
